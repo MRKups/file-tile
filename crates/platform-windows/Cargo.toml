@@ -1,0 +1,27 @@
+[package]
+name = "file-tile-platform-windows"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT"
+authors = ["Michał Kupś"]
+repository = "https://github.com/MRKups/file-tile"
+description = "Windows platform services for file-tile"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+too_many_lines = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"

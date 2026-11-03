@@ -1,0 +1,58 @@
+[package]
+name = "file-tile-platform-macos-appkit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT"
+authors = ["Michał Kupś"]
+repository = "https://github.com/MRKups/file-tile"
+description = "Isolated macOS AppKit drag, menu, open-panel, and Sparkle updater adapters for file-tile"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = { version = "=0.6.2", default-features = false, features = ["std"] }
+objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "block2",
+    "NSApplication",
+    "NSCell",
+    "NSDragging",
+    "NSDraggingItem",
+    "NSDraggingSession",
+    "NSEvent",
+    "NSImage",
+    "NSMenu",
+    "NSMenuItem",
+    "NSOpenPanel",
+    "NSPanel",
+    "NSPasteboard",
+    "NSResponder",
+    "NSSavePanel",
+    "NSView",
+    "NSWindow",
+    "objc2-core-foundation",
+] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSBundle",
+    "NSData",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+too_many_lines = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"
