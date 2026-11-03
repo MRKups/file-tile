@@ -1,0 +1,39 @@
+name: Bug Report
+description: Report broken behavior, crashes, or UI issues on macOS
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: file-tile Version
+      placeholder: "0.1.0 (or commit hash)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS Version & Chip
+      placeholder: "macOS 15.4, Apple M3"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open Layout mode...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What Happened vs Expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Diagnostic Log Lines (Optional)
+      description: From Settings -> Open logs (`~/Library/Application Support/file-tile/logs/file-tile.log`).
+      render: text
