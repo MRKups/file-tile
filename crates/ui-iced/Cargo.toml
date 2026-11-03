@@ -1,0 +1,43 @@
+[package]
+name = "file-tile-ui-iced"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT"
+authors = ["Michał Kupś"]
+repository = "https://github.com/MRKups/file-tile"
+description = "Iced desktop UI, widgets, dialogs, and runtime adapter for file-tile"
+
+[dependencies]
+file-tile-core = { path = "../core", version = "=0.1.0" }
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "advanced-shaping",
+    "crisp",
+    "image-without-codecs",
+    "svg",
+    "thread-pool",
+    "tiny-skia",
+    "web-colors",
+    "wgpu",
+] }
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+uuid = { version = "=1.28.0", default-features = false, features = ["std", "v4"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+too_many_lines = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"

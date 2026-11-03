@@ -1,0 +1,61 @@
+[workspace]
+members = [
+    ".",
+    "crates/core",
+    "crates/platform-linux",
+    "crates/platform-macos",
+    "crates/platform-macos-appkit",
+    "crates/platform-windows",
+    "crates/ui-iced",
+]
+default-members = ["."]
+
+[package]
+name = "file-tile"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT"
+authors = ["Michał Kupś"]
+repository = "https://github.com/MRKups/file-tile"
+readme = "README.md"
+description = "A persistent spatial workspace for browsing folders on macOS"
+keywords = ["file-manager", "macos", "spatial", "iced", "desktop"]
+categories = ["gui", "filesystem"]
+
+[package.metadata.packager]
+product-name = "file-tile"
+identifier = "com.michalkups.file-tile"
+category = "Utility"
+icons = ["assets/icons/app/icon.icns", "assets/icons/app/icon.png"]
+resources = ["LICENSE", "LICENSES"]
+formats = ["app", "dmg"]
+before-packaging-command = "python3 scripts/build.py release && python3 scripts/sparkle.py prepare"
+
+[package.metadata.packager.macos]
+minimum-system-version = "15.0"
+signing-identity = "-"
+entitlements = "target/sparkle/Entitlements.plist"
+frameworks = ["target/sparkle/Sparkle.framework"]
+info-plist-path = "target/sparkle/Info.sparkle.plist"
+
+[dependencies]
+file-tile-ui-iced = { path = "crates/ui-iced", version = "=0.1.0" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+too_many_lines = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"

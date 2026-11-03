@@ -1,0 +1,11 @@
+pub(crate) mod canvas_grid;
+pub(crate) mod draw_preview;
+pub(crate) mod editing;
+pub(crate) mod empty_state;
+pub(crate) mod geometry;
+pub(crate) mod layout_controls;
+mod retained_boxes;
+pub(crate) mod surface;
+pub(crate) mod toolbar;
+pub(crate) mod workspace;
+pub(crate) mod workspace_header;
