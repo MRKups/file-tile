@@ -1,0 +1,16 @@
+# Sparkle 2 updater configuration for packaged macOS releases.
+#
+# Setup when ready to sign updates:
+# 1. Run `task sparkle:keys` once on your Mac to create an EdDSA keypair in Keychain.
+# 2. Paste the printed public key string into `public_ed_key` below and commit it.
+# 3. Export the private key (`task sparkle:keys -- -x sparkle_eddsa.key`) into the
+#    GitHub Actions secret `SPARKLE_PRIVATE_KEY`, then delete `sparkle_eddsa.key`.
+
+feed_url = "https://github.com/MRKups/file-tile/releases/latest/download/appcast.xml"
+public_ed_key = "7qOaLw1PnNTnsWQHnSBpDEQ+NZXKy/6Ycb+3/kfFQ44="
+automatic_checks_default = false
+
+[sparkle]
+version = "2.9.6"
+url = "https://github.com/sparkle-project/Sparkle/releases/download/2.9.6/Sparkle-2.9.6.tar.xz"
+sha256 = "52bf9e88cdd972fc0c81501377a880e90d47031bd8ca5462488f843e2609e192"
