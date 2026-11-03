@@ -20,8 +20,8 @@ license = "MIT"
 authors = ["Michał Kupś"]
 repository = "https://github.com/MRKups/file-tile"
 readme = "README.md"
-description = "A persistent spatial workspace for browsing folders on macOS"
-keywords = ["file-manager", "macos", "spatial", "iced", "desktop"]
+description = "A file manager built for working across multiple folders at once."
+keywords = ["file-manager", "file-explorer", "productivity", "iced", "desktop"]
 categories = ["gui", "filesystem"]
 
 [package.metadata.packager]
