@@ -183,17 +183,13 @@ impl Application {
             .filter_map(|view| {
                 let listing = self.load(view.view)?.listing()?;
                 (listing.origin == ListingOrigin::Local
-                    && policy.check_read_directory(&listing.directory).is_ok())
+                    && policy.can_measure_directory(&listing.directory))
                 .then(|| listing.directory.clone())
             })
             .collect()
     }
     pub(in crate::application) fn demand_folder_usage(&mut self, path: PathBuf, now: Instant) {
-        if self
-            .safety_policy(None)
-            .check_read_directory(&path)
-            .is_err()
-        {
+        if !self.safety_policy(None).can_measure_directory(&path) {
             return;
         }
         let protected = self.usage_paths();

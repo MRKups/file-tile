@@ -63,6 +63,17 @@ impl FolderBox {
     pub fn views(&self) -> impl Iterator<Item = &FolderView> {
         std::iter::once(&self.standalone).chain(self.tabs.iter().flat_map(|tabs| &tabs.views))
     }
+    pub fn visible_views(&self) -> impl Iterator<Item = &FolderView> {
+        let (standalone, tabs) = match self.tabs.as_ref().filter(|tabs| tabs.visible) {
+            Some(tabs) => (None, Some(tabs.views.iter())),
+            None => (Some(&self.standalone), None),
+        };
+        standalone.into_iter().chain(tabs.into_iter().flatten())
+    }
+    pub(super) fn views_mut(&mut self) -> impl Iterator<Item = &mut FolderView> {
+        std::iter::once(&mut self.standalone)
+            .chain(self.tabs.iter_mut().flat_map(|tabs| &mut tabs.views))
+    }
     pub fn view(&self, id: ViewId) -> Option<&FolderView> {
         self.views().find(|view| view.view == id)
     }

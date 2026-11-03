@@ -202,6 +202,14 @@ impl Workspace {
     pub fn all_views(&self) -> impl Iterator<Item = &FolderView> {
         self.boxes.iter().flat_map(FolderBox::views)
     }
+    pub fn visible_views(&self) -> impl Iterator<Item = &FolderView> {
+        self.boxes.iter().flat_map(FolderBox::visible_views)
+    }
+    pub fn prune_removed_path(&mut self, source: &std::path::Path) {
+        for view in self.boxes.iter_mut().flat_map(FolderBox::views_mut) {
+            view.navigation.prune_removed_path(source);
+        }
+    }
     pub fn is_active(&self, view: ViewId) -> bool {
         self.active_views().any(|item| item.view == view)
     }

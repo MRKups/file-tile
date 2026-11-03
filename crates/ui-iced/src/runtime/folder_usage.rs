@@ -43,12 +43,12 @@ impl Desktop {
         };
         let path = request.directory.clone();
         let generation = request.generation;
-        let is_home = path == self.application.home();
-        let excluded = if is_home {
-            self.application.safety().excluded_home_usage_folders()
-        } else {
-            Vec::new()
-        };
+        let home = self.application.home();
+        let is_home = path == home;
+        let excluded = self
+            .application
+            .safety()
+            .excluded_usage_folders(&path, home);
         let (cancel, future) = workers.submit_with_exclusions(request, excluded, is_home);
         let (task, handle) = Task::perform(future, |result| {
             Message::Action(Action::FolderUsageCompleted(result))

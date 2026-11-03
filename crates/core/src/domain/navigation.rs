@@ -168,6 +168,31 @@ impl Navigation {
             }
         }
     }
+
+    pub(crate) fn prune_removed_path(&mut self, source: &Path) {
+        self.back.retain(|path| !path.starts_with(source));
+        self.forward.retain(|path| !path.starts_with(source));
+        let scope_references = self
+            .scope
+            .root()
+            .is_some_and(|path| path.starts_with(source))
+            || self.scope.range().is_some_and(|range| {
+                range.start().starts_with(source)
+                    || range.stops().iter().any(|path| path.starts_with(source))
+            });
+        if scope_references {
+            self.scope = super::Scope::default();
+        }
+        if self.current.starts_with(source)
+            && let Some(parent) = source.parent()
+            && self.scope.allows(parent)
+        {
+            self.current = parent.to_path_buf();
+        }
+        if self.start.starts_with(source) && self.scope.kind() == super::ScopeKind::Free {
+            self.start = self.current.clone();
+        }
+    }
 }
 
 fn push_history(history: &mut VecDeque<PathBuf>, path: PathBuf) {

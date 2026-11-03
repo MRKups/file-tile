@@ -175,15 +175,9 @@ impl Application {
     fn is_workspace_referenced_folder(&self, source: &std::path::Path) -> bool {
         self.loads.values().any(|load| {
             matches!(load, LoadState::Loading { request, .. } if request.directory.starts_with(source))
-        }) || self.workspace.all_views().any(|view| {
+        }) || self.workspace.visible_views().any(|view| {
             let nav = &view.navigation;
             nav.current().starts_with(source)
-                || nav.start().starts_with(source)
-                || nav
-                    .back_history()
-                    .iter()
-                    .chain(nav.forward_history())
-                    .any(|path| path.starts_with(source))
                 || nav.scope().root().is_some_and(|path| path.starts_with(source))
                 || nav.scope().range().is_some_and(|range| {
                     range.start().starts_with(source)
@@ -199,7 +193,7 @@ impl Application {
         self.safety_policy(None).check_entry_modification(source)?;
         if self.is_workspace_referenced_folder(source) {
             return Err(
-                "This folder is used by a view, history, or navigation boundary. Reconfigure those references before moving it.",
+                "This folder is open in a box or used by a navigation scope. Navigate away or update the scope before moving it.",
             );
         }
         Ok(())
@@ -264,7 +258,7 @@ impl Application {
             && self.is_workspace_referenced_folder(source)
         {
             return Err(
-                "This folder is used by a view, history, or navigation boundary. Reconfigure those references before renaming.",
+                "This folder is open in a box or used by a navigation scope. Navigate away or update the scope before renaming.",
             );
         }
         Ok(())
@@ -300,7 +294,7 @@ impl Application {
             && self.is_workspace_referenced_folder(source)
         {
             return Err(
-                "This folder is used by a view, history, or navigation boundary. Reconfigure those references before moving it to Trash.",
+                "This folder is open in a box or used by a navigation scope. Navigate away or update the scope before moving it to Trash.",
             );
         }
         Ok(())
@@ -407,6 +401,11 @@ impl Application {
             Outcome::Complete => {
                 operation.completed += 1;
                 operation.record(&receipt.job, ItemStatus::Complete);
+                if let Item::Trash(source) | Item::Move(source) | Item::Rename(source) =
+                    &receipt.job.item
+                {
+                    self.workspace.prune_removed_path(source);
+                }
             }
             Outcome::Failed(error) => {
                 operation.record(&receipt.job, ItemStatus::Failed);

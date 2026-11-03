@@ -197,25 +197,7 @@ fn preferences(
         );
         crate::application::preferences::typography::TypographyPreferences::default()
     });
-    let safety = serde_json::from_value::<SafetyRecord>(record.safety)
-        .ok()
-        .map(|record| crate::domain::SafetyPreferences {
-            desktop_access: record.desktop_access,
-            documents_access: record.documents_access,
-            downloads_access: record.downloads_access,
-            full_disk_access: record.full_disk_access,
-            system_folders: record.system_folders,
-            applications: record.applications,
-            credentials: record.credentials,
-        })
-        .unwrap_or_else(|| {
-            issue(
-                issues,
-                0,
-                "invalid safety preferences; using default protections for viewing only",
-            );
-            crate::domain::SafetyPreferences::default()
-        });
+    let safety = restore_safety(record.safety, issues);
     Ok(ConfigurationDocument::Preferences(AppPreferences {
         last_workspace_id,
         window,
@@ -224,6 +206,44 @@ fn preferences(
         typography,
         safety,
     }))
+}
+
+fn restore_safety(
+    value: Value,
+    issues: &mut Vec<RecoveryIssue>,
+) -> crate::domain::SafetyPreferences {
+    let legacy = value.get("desktop_access").is_none();
+    serde_json::from_value::<SafetyRecord>(value)
+        .ok()
+        .map(|record| crate::domain::SafetyPreferences {
+            desktop_access: record.desktop_access,
+            documents_access: record.documents_access,
+            downloads_access: record.downloads_access,
+            full_disk_access: record.full_disk_access,
+            system_folders: if legacy {
+                !record.system_folders
+            } else {
+                record.system_folders
+            },
+            applications: if legacy {
+                !record.applications
+            } else {
+                record.applications
+            },
+            credentials: if legacy {
+                !record.credentials
+            } else {
+                record.credentials
+            },
+        })
+        .unwrap_or_else(|| {
+            issue(
+                issues,
+                0,
+                "invalid safety preferences; using default protections for viewing only",
+            );
+            crate::domain::SafetyPreferences::default()
+        })
 }
 
 #[derive(Deserialize)]

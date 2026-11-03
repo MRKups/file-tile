@@ -126,7 +126,19 @@ impl SafetyPreferences {
     }
 
     pub fn excluded_home_usage_folders(self) -> Vec<&'static str> {
-        let mut excluded = Vec::new();
+        let mut excluded = vec![
+            "Library",
+            "Pictures",
+            "Music",
+            "Movies",
+            ".Trash",
+            "OneDrive*",
+            "CloudStorage",
+            "*.musiclibrary",
+            "*.photoslibrary",
+            "*.tvlibrary",
+            "Media.localized",
+        ];
         if !self.desktop_access {
             excluded.push("Desktop");
         }
@@ -136,10 +148,23 @@ impl SafetyPreferences {
         if !self.downloads_access {
             excluded.push("Downloads");
         }
-        if !self.full_disk_access {
-            excluded.extend_from_slice(&["Library", "Pictures", "Music", "Movies", ".Trash"]);
-        }
         excluded
+    }
+
+    pub fn excluded_usage_folders(self, directory: &Path, home: &Path) -> Vec<&'static str> {
+        if has_usable_home(home) && (directory == home || home.starts_with(directory)) {
+            self.excluded_home_usage_folders()
+        } else {
+            vec![
+                ".Trash",
+                "OneDrive*",
+                "CloudStorage",
+                "*.musiclibrary",
+                "*.photoslibrary",
+                "*.tvlibrary",
+                "Media.localized",
+            ]
+        }
     }
 }
 
@@ -154,6 +179,26 @@ pub struct SafetyPolicy {
 impl SafetyPolicy {
     pub fn check_read_directory(&self, directory: &Path) -> Result<(), &'static str> {
         check_read_directory(directory, &self.home, self.preferences)
+    }
+
+    pub fn can_measure_directory(&self, directory: &Path) -> bool {
+        if self.check_read_directory(directory).is_err() || is_root_container(directory) {
+            return false;
+        }
+        if has_usable_home(&self.home) {
+            for name in ["Library", ".Trash", "Music", "Pictures", "Movies"] {
+                if directory.starts_with(self.home.join(name)) {
+                    return false;
+                }
+            }
+            if let Ok(relative) = directory.strip_prefix(&self.home)
+                && let Some(std::path::Component::Normal(first)) = relative.components().next()
+                && first.to_string_lossy().starts_with("OneDrive")
+            {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn check_write_directory(&self, directory: &Path) -> Result<(), &'static str> {

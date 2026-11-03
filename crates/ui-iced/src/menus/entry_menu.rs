@@ -335,6 +335,10 @@ fn command_enabled(desktop: &Desktop, menu: &Menu, command: Command) -> bool {
                 && desktop
                     .application
                     .can_write_folder(menu.view, &menu.listing.directory)
+                && desktop
+                    .application
+                    .rename_guidance(menu.view, &menu.path)
+                    .is_ok()
         }
         Command::Copy => entry.kind != EntryKind::Other || entry.symlink,
         Command::Cut => {
@@ -345,14 +349,14 @@ fn command_enabled(desktop: &Desktop, menu: &Menu, command: Command) -> bool {
         Command::Trash => {
             (entry.kind != EntryKind::Other || entry.symlink)
                 && desktop.application.workspace().mode() == crate::domain::Mode::Browse
+                && desktop
+                    .application
+                    .can_write_folder(menu.view, &menu.listing.directory)
                 && if menu.in_preview {
                     desktop
                         .application
-                        .can_write_folder(menu.view, &menu.listing.directory)
-                        && desktop
-                            .application
-                            .trash_guidance(menu.view, &menu.path)
-                            .is_ok()
+                        .trash_guidance(menu.view, &menu.path)
+                        .is_ok()
                 } else {
                     desktop
                         .views
@@ -496,25 +500,24 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
         ))
         .push(context_menu::divider(palette));
     let trash_action = action(Command::Trash);
+    let prohibit_delete = desktop
+        .application
+        .workspace()
+        .view(menu.view)
+        .is_some_and(|view| view.settings.prohibit_delete);
     contents = contents.push(context_menu::item(
         TRASH_ID,
         "entry-context-trash-icon",
         Icon::Trash,
-        if trash_action.is_some() {
-            "Move to Trash"
-        } else {
+        if prohibit_delete {
             "Deletion Prohibited"
+        } else {
+            "Move to Trash"
         },
         trash_action,
         palette,
     ));
-    let guidance = if !command_enabled(desktop, menu, Command::CopyPath) {
-        Some("Path cannot be copied as text.")
-    } else if entry.kind == EntryKind::Directory && !command_enabled(desktop, menu, Command::Open) {
-        Some("Outside this view's scope.")
-    } else {
-        None
-    };
+    let guidance = menu_guidance(desktop, menu, entry);
     if let Some(guidance) = guidance {
         contents =
             contents.push(container(ty.small(guidance).color(palette.muted)).padding([4, 12]));
@@ -529,6 +532,41 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
     )
 }
 
+fn menu_guidance(desktop: &Desktop, menu: &Menu, entry: &DirectoryEntry) -> Option<&'static str> {
+    if !command_enabled(desktop, menu, Command::CopyPath) {
+        Some("Path cannot be copied as text.")
+    } else if entry.kind == EntryKind::Directory && !command_enabled(desktop, menu, Command::Open) {
+        Some("Outside this view's scope.")
+    } else if !command_enabled(desktop, menu, Command::Trash)
+        && !desktop
+            .application
+            .workspace()
+            .view(menu.view)
+            .is_some_and(|view| view.settings.prohibit_delete)
+    {
+        if entry.kind == EntryKind::Directory
+            && !entry.symlink
+            && desktop.application.trash_guidance(menu.view, &menu.path)
+                == Err(
+                    "This folder is open in a box or used by a navigation scope. Navigate away or update the scope before moving it to Trash.",
+                )
+        {
+            Some("Open in a box or scope.")
+        } else if desktop
+            .application
+            .safety_policy(Some(menu.view))
+            .check_trash(&menu.path)
+            .is_err()
+        {
+            Some("Protected in Access and Safety.")
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
 fn menu_bounds(desktop: &Desktop, menu: &Menu) -> iced::Rectangle {
     let ty = crate::window::typography::Style(desktop.application.typography());
     let entry = desktop.menu_listed_entry(menu);
@@ -537,10 +575,7 @@ fn menu_bounds(desktop: &Desktop, menu: &Menu) -> iced::Rectangle {
     } else {
         5.0
     };
-    let guidance = !command_enabled(desktop, menu, Command::CopyPath)
-        || entry.is_some_and(|entry| {
-            entry.kind == EntryKind::Directory && !command_enabled(desktop, menu, Command::Open)
-        });
+    let guidance = entry.is_some_and(|entry| menu_guidance(desktop, menu, entry).is_some());
     context_menu::bounds(
         menu.position,
         desktop.size,
