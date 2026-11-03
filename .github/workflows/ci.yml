@@ -43,6 +43,9 @@ jobs:
       - name: Check Rust source guard
         run: python3 scripts/dev.py guard
 
+      - name: Run supply-chain, execution-surface, and Unicode security audit
+        run: python3 scripts/audit.py
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 

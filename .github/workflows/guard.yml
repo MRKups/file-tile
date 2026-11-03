@@ -25,5 +25,8 @@ jobs:
       - name: Check repository hygiene, secrets, and Rust source guard
         run: python3 scripts/dev.py guard
 
+      - name: Run supply-chain, execution-surface, and Unicode security audit
+        run: python3 scripts/audit.py
+
       - name: Run development tooling tests
         run: python3 -m unittest discover -s scripts/tests -p "test_*.py" -v

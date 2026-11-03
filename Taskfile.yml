@@ -80,10 +80,16 @@ tasks:
       - cargo fmt --all
 
   guard:
-    desc: Reject Rust lint suppressions and ignored tests (textual check)
+    desc: Reject Rust lint suppressions, ignored tests, and forbidden repository files
     dir: '{{.ROOT_DIR}}'
     cmds:
       - '{{.PYTHON | q}} scripts/dev.py guard'
+
+  audit:
+    desc: Scan for supply-chain tampering, unauthorized execution surface, and hidden Unicode
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/audit.py'
 
   docs:check:
     desc: Check local Markdown links and heading anchors
@@ -92,10 +98,11 @@ tasks:
       - '{{.PYTHON | q}} scripts/dev.py docs'
 
   lint:
-    desc: Run the source guard, formatting check, and Clippy
+    desc: Run the source guard, security audit, formatting check, and Clippy
     dir: '{{.ROOT_DIR}}'
     cmds:
       - task: guard
+      - task: audit
       - cargo fmt --all -- --check
       - cargo clippy --locked --workspace --all-targets -- -D warnings
 
