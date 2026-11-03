@@ -60,6 +60,24 @@ FORBIDDEN_KEY_EXTENSIONS = {
     ".keychain",
     ".keychain-db",
 }
+FORBIDDEN_ARTIFACT_EXTENSIONS = {
+    ".dmg",
+    ".raw",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".xz",
+    ".dylib",
+    ".so",
+    ".dll",
+    ".exe",
+    ".rlib",
+    ".a",
+    ".o",
+}
+MAX_TRACKED_FILE_BYTES = 2 * 1024 * 1024
+CONFLICT_MARKERS = re.compile(r"^(?:<{7} |={7}$|>{7} )", re.MULTILINE)
+NOTICE_ENTRY = re.compile(r"^- ([A-Za-z0-9_-]+) ([0-9]+\.[0-9]+\.[0-9]+[^\s|]*) \|", re.MULTILINE)
 SECRET_PATTERNS = (
     ("private key material", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----")),
     (
@@ -71,7 +89,14 @@ SECRET_PATTERNS = (
         "API secret key",
         re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}\b|\bAIza[0-9A-Za-z_-]{35}\b"),
     ),
-    ("host user path", re.compile(r"/Users/(?!(?:demo|fixture)\b)[A-Za-z0-9._-]+")),
+    (
+        "host user path",
+        re.compile(
+            r"/Users/(?!(?:demo|fixture)\b)[A-Za-z0-9._-]+"
+            r"|/home/(?!(?:demo|fixture|runner)\b)[A-Za-z0-9._-]+"
+            r"|[A-Za-z]:[/\\]Users[/\\](?!(?:demo|fixture)\b)[A-Za-z0-9._-]+"
+        ),
+    ),
 )
 ATTRIBUTES = re.compile(r"#\s*!?\s*\[([^\]]*)\]", re.DOTALL)
 INLINE_LINKS = re.compile(r"!?\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^\s)]+)(?:\s+[^)\n]*)?\)")
@@ -227,6 +252,57 @@ def tracked_repository_files(root: Path) -> list[Path]:
     return list(walk_files(root, "", EXCLUDED))
 
 
+def check_license_notices(root: Path) -> list[str]:
+    lock_path = root / "Cargo.lock"
+    notices_path = root / "LICENSES" / "THIRD-PARTY-NOTICES.txt"
+    if not lock_path.is_file() or not notices_path.is_file():
+        return []
+    try:
+        lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+        notices = notices_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return ["LICENSES/THIRD-PARTY-NOTICES.txt: unreadable Cargo.lock or notice file"]
+    packages = lock.get("package", [])
+    lock_pairs = {(pkg["name"], pkg["version"]) for pkg in packages}
+    entries = NOTICE_ENTRY.findall(notices)
+    errors = []
+    for name, version in entries:
+        if name != "Sparkle" and (name, version) not in lock_pairs:
+            errors.append(
+                f"LICENSES/THIRD-PARTY-NOTICES.txt: stale crate entry {name} {version} not in Cargo.lock (run `task licenses`)"
+            )
+    workspace_names = {pkg["name"] for pkg in packages if "source" not in pkg}
+    notice_names = {name for name, _ in entries}
+    for pkg in packages:
+        if pkg["name"] in workspace_names:
+            for dep in pkg.get("dependencies", []):
+                dep_name = dep.split()[0]
+                if dep_name not in workspace_names and dep_name not in notice_names:
+                    errors.append(
+                        f"LICENSES/THIRD-PARTY-NOTICES.txt: missing direct dependency {dep_name} (run `task licenses`)"
+                    )
+    return errors
+
+
+def check_workflows(root: Path) -> list[str]:
+    workflows_dir = root / ".github" / "workflows"
+    if not workflows_dir.is_dir():
+        return []
+    errors = []
+    for path in sorted(workflows_dir.glob("*.yml")):
+        relative = path.relative_to(root)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            errors.append(f"{relative}: unreadable workflow file")
+            continue
+        if re.search(r"^\s*pull_request_target\s*:", text, re.MULTILINE):
+            errors.append(f"{relative}: forbidden pull_request_target trigger")
+        if not re.search(r"^permissions:\n  contents: read\b", text, re.MULTILINE):
+            errors.append(f"{relative}: missing top-level `permissions: contents: read` declaration")
+    return errors
+
+
 def check_repository_hygiene(root: Path) -> list[str]:
     errors = []
     for path in tracked_repository_files(root):
@@ -234,8 +310,12 @@ def check_repository_hygiene(root: Path) -> list[str]:
         if any(part in FORBIDDEN_TRACKED_NAMES for part in relative.parts):
             errors.append(f"{relative}: forbidden private or local-only file tracked in repository")
             continue
-        if relative.suffix.lower() in FORBIDDEN_KEY_EXTENSIONS:
+        suffix = relative.suffix.lower()
+        if suffix in FORBIDDEN_KEY_EXTENSIONS:
             errors.append(f"{relative}: forbidden key or certificate file tracked in repository")
+            continue
+        if suffix in FORBIDDEN_ARTIFACT_EXTENSIONS:
+            errors.append(f"{relative}: forbidden binary or archive artifact tracked in repository")
             continue
         if (relative.name == ".env" or relative.name.startswith(".env.")) and not relative.name.endswith(".example"):
             errors.append(f"{relative}: forbidden environment file tracked in repository")
@@ -243,14 +323,20 @@ def check_repository_hygiene(root: Path) -> list[str]:
         if not path.is_file() or path.is_symlink():
             continue
         try:
-            if path.stat().st_size > 2 * 1024 * 1024:
+            size = path.stat().st_size
+            if size > MAX_TRACKED_FILE_BYTES:
+                errors.append(f"{relative}: tracked file exceeds 2 MiB limit ({size} bytes)")
                 continue
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        if CONFLICT_MARKERS.search(text):
+            errors.append(f"{relative}: unresolved Git merge-conflict marker")
         for label, pattern in SECRET_PATTERNS:
             if pattern.search(text):
                 errors.append(f"{relative}: detected {label}")
+    errors.extend(check_license_notices(root))
+    errors.extend(check_workflows(root))
     return errors
 
 

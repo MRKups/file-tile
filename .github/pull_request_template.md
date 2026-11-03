@@ -14,10 +14,4 @@ Closes #
 
 ## Verification
 
-<!-- Paste the output or results of the checks you ran locally. -->
-
-- [ ] `python3 scripts/dev.py docs`
-- [ ] `python3 scripts/dev.py guard`
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --locked --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --locked --workspace`
+- [ ] `task check` passes locally
