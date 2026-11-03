@@ -80,10 +80,12 @@ tasks:
       - cargo fmt --all
 
   guard:
-    desc: Reject Rust lint suppressions, ignored tests, and forbidden repository files
+    desc: Run all fast repository safety scripts (docs, hygiene/secret guard, and security audit)
     dir: '{{.ROOT_DIR}}'
     cmds:
+      - '{{.PYTHON | q}} scripts/dev.py docs'
       - '{{.PYTHON | q}} scripts/dev.py guard'
+      - '{{.PYTHON | q}} scripts/audit.py'
 
   audit:
     desc: Scan for supply-chain tampering, unauthorized execution surface, and hidden Unicode
@@ -98,11 +100,10 @@ tasks:
       - '{{.PYTHON | q}} scripts/dev.py docs'
 
   lint:
-    desc: Run the source guard, security audit, formatting check, and Clippy
+    desc: Run repository safety scripts, formatting check, and Clippy
     dir: '{{.ROOT_DIR}}'
     cmds:
       - task: guard
-      - task: audit
       - cargo fmt --all -- --check
       - cargo clippy --locked --workspace --all-targets -- -D warnings
 
@@ -127,10 +128,9 @@ tasks:
       - '{{.PYTHON | q}} -m unittest discover -s scripts/tests -p "test_*.py" -v'
 
   check:
-    desc: Run documentation checks, lint, tooling tests, and the Rust suite
+    desc: Run all safety scripts, lint, tooling tests, and the Rust suite
     dir: '{{.ROOT_DIR}}'
     cmds:
-      - task: docs:check
       - task: lint
       - task: test:tooling
       - task: test
