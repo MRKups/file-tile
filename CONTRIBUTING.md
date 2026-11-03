@@ -8,7 +8,7 @@ Thank you for checking out `file-tile` and taking the time to share feedback.
 - **Questions, workflow ideas, and general feedback:** Start a thread in GitHub Discussions.
 - **Security vulnerabilities:** Please report them privately via [SECURITY.md](SECURITY.md).
 
-## Pull Requests (Currently Paused)
+## Pull Requests
 
 `file-tile` is in its early stages, and core architecture and design are still settling. To keep iteration fast and avoid wasted effort on your side, external pull requests are discouraged for the moment until a clear public roadmap and contributor workflow emerge.
 

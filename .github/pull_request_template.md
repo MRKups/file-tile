@@ -1,5 +1,5 @@
 > [!NOTE]
-> **External pull requests are currently paused** while `file-tile` is in early development and its core architecture is still settling.
+> **External pull requests are discouraged for the moment** while `file-tile` is in early development and its core architecture is still settling.
 > Unless a maintainer invited this pull request on an open issue, please open a [GitHub Issue](https://github.com/MRKups/file-tile/issues/new/choose) or [Discussion](https://github.com/MRKups/file-tile/discussions) first. See [CONTRIBUTING.md](../CONTRIBUTING.md) for details.
 
 ## Related Issue
