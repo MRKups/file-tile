@@ -14,6 +14,7 @@ tasks:
     desc: Build file-tile (PROFILE=release by default)
     dir: '{{.ROOT_DIR}}'
     cmds:
+      - task: guard
       - '{{.PYTHON | q}} scripts/build.py {{.PROFILE | q}} {{.CLI_ARGS}}'
 
   package:
@@ -47,9 +48,10 @@ tasks:
       - '{{.PYTHON | q}} scripts/licenses.py'
 
   run:
-    desc: Launch file-tile with automatic workspace saving (PROFILE=release by default)
+    desc: Run safety checks and launch file-tile (PROFILE=release by default)
     dir: '{{.ROOT_DIR}}'
     cmds:
+      - task: guard
       - 'cargo run --locked --profile {{.PROFILE | q}} -- {{.CLI_ARGS}}'
 
   run:isolated:
