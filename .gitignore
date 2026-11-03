@@ -1,0 +1,40 @@
+# Rust build output. Cargo.lock belongs in version control for this executable.
+/target/
+
+# Private local archive, working notes, and agent instructions.
+/.kups/
+/.agent/
+/.agents/
+/.claude/
+/.gemini/
+/.cursor/
+/AGENTS.md
+/CLAUDE.md
+/WATCHDOG.md
+/GEMINI.md
+
+# Code-signing keys, certificates, and temporary keychains.
+/private_keys/
+*.p8
+*.p12
+*.cer
+*.key
+*.pem
+*.keychain
+*.keychain-db
+
+# Developer-tool bytecode, editors, and local scratch.
+__pycache__/
+*.pyc
+/.vscode/
+/.idea/
+/scratch/
+*.swp
+*~
+
+# macOS metadata and private local configuration.
+.DS_Store
+.env
+.env.*
+!.env.example
+!.env.*.example

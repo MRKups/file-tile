@@ -1,0 +1,129 @@
+version: "3"
+
+vars:
+  PROFILE: '{{.PROFILE | default "release"}}'
+  PYTHON: '{{.PYTHON | default "python3"}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  build:
+    desc: Build file-tile (PROFILE=release by default)
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/build.py {{.PROFILE | q}} {{.CLI_ARGS}}'
+
+  package:
+    desc: Package macOS .app and .dmg bundles with Sparkle 2 and cargo-packager
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - 'CI=true cargo packager --release {{.CLI_ARGS}}'
+
+  sparkle:fetch:
+    desc: Download and verify the pinned Sparkle 2 release archive
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/sparkle.py fetch'
+
+  sparkle:keys:
+    desc: Generate or export Sparkle EdDSA signing keys via Sparkle generate_keys
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/sparkle.py keys -- {{.CLI_ARGS}}'
+
+  sparkle:appcast:
+    desc: Generate a signed Sparkle appcast.xml from SPARKLE_PRIVATE_KEY
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/sparkle.py appcast {{.CLI_ARGS}}'
+
+  licenses:
+    desc: Regenerate LICENSES/THIRD-PARTY-NOTICES.txt from Cargo.lock
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/licenses.py'
+
+  run:
+    desc: Launch file-tile with automatic workspace saving (PROFILE=release by default)
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - 'cargo run --locked --profile {{.PROFILE | q}} -- {{.CLI_ARGS}}'
+
+  run:isolated:
+    desc: Launch with a reusable private state root (STATE_DIR is required)
+    dir: '{{.ROOT_DIR}}'
+    requires:
+      vars: [STATE_DIR]
+    cmds:
+      - 'cargo run --locked --profile {{.PROFILE | q}} -- --state-dir {{.STATE_DIR | q}} {{.CLI_ARGS}}'
+
+  fixture:create:
+    desc: Developer helper, create synthetic folders and print an isolated launch command
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/dev.py fixture'
+
+  qualification:report:
+    desc: Report existing development evidence without building or launching
+    dir: '{{.ROOT_DIR}}'
+    silent: true
+    cmds:
+      - '{{.PYTHON | q}} scripts/dev.py qualification {{.CLI_ARGS}}'
+
+  fmt:
+    desc: Format Rust sources
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - cargo fmt --all
+
+  guard:
+    desc: Reject Rust lint suppressions and ignored tests (textual check)
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/dev.py guard'
+
+  docs:check:
+    desc: Check local Markdown links and heading anchors
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} scripts/dev.py docs'
+
+  lint:
+    desc: Run the source guard, formatting check, and Clippy
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - task: guard
+      - cargo fmt --all -- --check
+      - cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    desc: Run the Rust safety regression suite
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - cargo test --locked --workspace
+
+  test:focused:
+    desc: Run one Rust test filter; reject zero executed tests
+    dir: '{{.ROOT_DIR}}'
+    requires:
+      vars: [TEST]
+    cmds:
+      - '{{.PYTHON | q}} scripts/dev.py focused --test {{.TEST | q}} {{.CLI_ARGS}}'
+
+  test:tooling:
+    desc: Test fixture isolation and evidence-report safety
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - '{{.PYTHON | q}} -m unittest discover -s scripts/tests -p "test_*.py" -v'
+
+  check:
+    desc: Run documentation checks, lint, tooling tests, and the Rust suite
+    dir: '{{.ROOT_DIR}}'
+    cmds:
+      - task: docs:check
+      - task: lint
+      - task: test:tooling
+      - task: test
