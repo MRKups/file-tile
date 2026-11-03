@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+jobs:
+  check:
+    name: Verify (macOS 15+ Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Verify Apple Silicon runner architecture
+        run: |
+          arch_name="$(uname -m)"
+          if [ "$arch_name" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch_name" >&2
+            exit 1
+          fi
+
+      - name: Install pinned Rust toolchain
+        run: |
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          rustup default "$toolchain"
+          rustc -Vv
+          cargo -V
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check documentation links and anchors
+        run: python3 scripts/dev.py docs
+
+      - name: Check Rust source guard
+        run: python3 scripts/dev.py guard
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy lints
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Run development tooling tests
+        run: python3 -m unittest discover -s scripts/tests -p "test_*.py" -v
+
+      - name: Run Rust safety regression suite
+        run: cargo test --locked
+
+      - name: Build privacy-remapped release binary
+        run: python3 scripts/build.py release
+
+      - name: Verify release binary target floor, architecture, and path privacy
+        run: |
+          lipo -archs target/release/file-tile | grep -qx "arm64"
+          otool -l target/release/file-tile | grep -A 5 LC_BUILD_VERSION | grep -q "minos 15.0"
+          python3 -c '
+          import os
+          from pathlib import Path
+          data = Path("target/release/file-tile").read_bytes()
+          for forbidden in (os.environ["HOME"], os.environ["GITHUB_WORKSPACE"]):
+              if forbidden.encode("utf-8") in data:
+                  raise SystemExit(f"Builder path leaked into release binary: {forbidden}")
+          print("Release binary path-privacy check passed.")
+          '

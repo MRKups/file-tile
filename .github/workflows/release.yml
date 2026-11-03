@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional tag (e.g. v0.1.0 or v0.1.0-preview.1) to publish a GitHub Release; leave empty for artifact-only build"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+jobs:
+  package:
+    name: Package macOS Release (Apple Silicon, macOS 15+)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Verify Apple Silicon runner and tag version match
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          arch_name="$(uname -m)"
+          if [ "$arch_name" != "arm64" ]; then
+            echo "Expected arm64 runner, got $arch_name" >&2
+            exit 1
+          fi
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          if [ -n "$RELEASE_TAG" ]; then
+            case "$RELEASE_TAG" in
+              "v${version}"|"v${version}-"*) ;;
+              *)
+                echo "release_tag ($RELEASE_TAG) must match v${version} or v${version}-<prerelease>" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+      - name: Install pinned Rust toolchain
+        run: |
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
+          rustup default "$toolchain"
+          rustc -Vv
+          cargo -V
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run pre-release verification gate
+        run: |
+          python3 scripts/dev.py docs
+          python3 scripts/dev.py guard
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          python3 -m unittest discover -s scripts/tests -p "test_*.py" -v
+          cargo test --locked
+
+      - name: Install cargo-packager
+        run: |
+          if ! command -v cargo-packager >/dev/null 2>&1; then
+            cargo install cargo-packager --version 0.11.8 --locked
+          fi
+          cargo packager --version
+
+      - name: Build, sign, and package macOS .app and .dmg bundles
+        env:
+          CI: "true"
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          RAW_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          RAW_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          RAW_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          RAW_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          RAW_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          RAW_APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+          RAW_APPLE_ID: ${{ secrets.APPLE_ID }}
+          RAW_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          RAW_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RAW_APPLE_SIGNING_IDENTITY}" ]; then
+            python3 -c 'import os, pathlib; p = pathlib.Path("Cargo.toml"); p.write_text(p.read_text("utf-8").replace("signing-identity = \"-\"", "signing-identity = \"" + os.environ["RAW_APPLE_SIGNING_IDENTITY"].strip() + "\""), "utf-8")'
+          fi
+          if [ -n "${RAW_APPLE_CERTIFICATE}" ]; then
+            export APPLE_CERTIFICATE="${RAW_APPLE_CERTIFICATE}"
+            export APPLE_CERTIFICATE_PASSWORD="${RAW_APPLE_CERTIFICATE_PASSWORD}"
+          fi
+          if [ -n "${RAW_APPLE_API_KEY}" ] && [ -n "${RAW_APPLE_API_ISSUER}" ] && [ -n "${RAW_APPLE_API_KEY_CONTENT}" ]; then
+            key_file="${RUNNER_TEMP}/AuthKey_${RAW_APPLE_API_KEY}.p8"
+            umask 077
+            printf '%s\n' "${RAW_APPLE_API_KEY_CONTENT}" > "${key_file}"
+            export APPLE_API_KEY="${RAW_APPLE_API_KEY}"
+            export APPLE_API_ISSUER="${RAW_APPLE_API_ISSUER}"
+            export APPLE_API_KEY_PATH="${key_file}"
+          elif [ -n "${RAW_APPLE_ID}" ] && [ -n "${RAW_APPLE_PASSWORD}" ] && [ -n "${RAW_APPLE_TEAM_ID}" ]; then
+            export APPLE_ID="${RAW_APPLE_ID}"
+            export APPLE_PASSWORD="${RAW_APPLE_PASSWORD}"
+            export APPLE_TEAM_ID="${RAW_APPLE_TEAM_ID}"
+          fi
+          cargo packager --release --formats app,dmg
+          git checkout -- Cargo.toml
+
+      - name: Scrub temporary signing key material
+        if: always()
+        run: rm -f "${RUNNER_TEMP}"/AuthKey_*.p8
+
+      - name: Verify bundle metadata, Sparkle framework, licenses, code signature, and path privacy
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" target/release/file-tile.app/Contents/Info.plist | grep -qx "15.0"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" target/release/file-tile.app/Contents/Info.plist | grep -qx "com.michalkups.file-tile"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" target/release/file-tile.app/Contents/Info.plist | grep -qx "${version}"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" target/release/file-tile.app/Contents/Info.plist | grep -qx "${version}"
+          /usr/libexec/PlistBuddy -c "Print :SUFeedURL" target/release/file-tile.app/Contents/Info.plist | grep -q "^https://"
+          /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" target/release/file-tile.app/Contents/Info.plist | grep -q "."
+          test -d target/release/file-tile.app/Contents/Frameworks/Sparkle.framework
+          lipo -archs target/release/file-tile.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle | grep -qx "arm64"
+          lipo -archs target/release/file-tile.app/Contents/MacOS/file-tile | grep -qx "arm64"
+          otool -l target/release/file-tile.app/Contents/MacOS/file-tile | grep -A 5 LC_BUILD_VERSION | grep -q "minos 15.0"
+          for required in \
+            "LICENSE" \
+            "LICENSES/Cantarell-OFL.txt" \
+            "LICENSES/Monaspace-Argon-OFL.txt" \
+            "LICENSES/THIRD-PARTY-NOTICES.txt"; do
+            test -s "target/release/file-tile.app/Contents/Resources/${required}"
+          done
+          codesign --verify --deep --strict --verbose=2 target/release/file-tile.app
+          python3 -c '
+          import os
+          from pathlib import Path
+          data = Path("target/release/file-tile.app/Contents/MacOS/file-tile").read_bytes()
+          for forbidden in (os.environ["HOME"], os.environ["GITHUB_WORKSPACE"]):
+              if forbidden.encode("utf-8") in data:
+                  raise SystemExit(f"Builder path leaked into packaged binary: {forbidden}")
+          print("Packaged binary path-privacy check passed.")
+          '
+
+      - name: Assemble release artifacts, Sparkle appcast, and SHA-256 checksums
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          tag_or_default="${RELEASE_TAG:-v${version}}"
+          mkdir -p target/release/dist
+          cp "target/release/file-tile_${version}_aarch64.dmg" "target/release/dist/"
+          checksum_files=("file-tile_${version}_aarch64.dmg")
+          if [ -n "${SPARKLE_PRIVATE_KEY}" ]; then
+            python3 scripts/sparkle.py appcast \
+              --dir target/release/dist \
+              --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag_or_default}/"
+            checksum_files+=("appcast.xml")
+          fi
+          (
+            cd target/release/dist
+            shasum -a 256 "${checksum_files[@]}" > SHA256SUMS.txt
+            cat SHA256SUMS.txt
+          )
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: file-tile-macos15-aarch64
+          path: |
+            target/release/dist/file-tile_*_aarch64.dmg
+            target/release/dist/appcast.xml
+            target/release/dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    if: inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: file-tile-macos15-aarch64
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          prerelease: ${{ contains(inputs.release_tag, '-') }}
+          files: dist/*
+          generate_release_notes: true

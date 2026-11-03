@@ -1,0 +1,29 @@
+name: Repository Guard
+
+on:
+  push:
+    branches:
+      - main
+      - development
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Secret, File, and Source Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check documentation links and anchors
+        run: python3 scripts/dev.py docs
+
+      - name: Check repository hygiene, secrets, and Rust source guard
+        run: python3 scripts/dev.py guard
+
+      - name: Run development tooling tests
+        run: python3 -m unittest discover -s scripts/tests -p "test_*.py" -v
