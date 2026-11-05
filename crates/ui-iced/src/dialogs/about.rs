@@ -181,8 +181,12 @@ pub(crate) fn view<'a>(
             .style(|_, _| svg::Style { color: None }),
         column![
             ty.title("file-tile").color(palette.text),
-            ty.control(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                .color(palette.muted),
+            ty.control(format!(
+                "Version {} ({})",
+                crate::VERSION,
+                crate::GIT_COMMIT
+            ))
+            .color(palette.muted),
         ]
         .spacing(3),
     ]

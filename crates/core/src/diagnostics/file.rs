@@ -22,10 +22,11 @@ pub(super) fn run(
     let mut sink = Sink::open(root)?;
     let session = uuid::Uuid::new_v4();
     sink.write(&format!(
-        "{} INFO  session - Application started. pid={} session={session} version={}\n",
+        "{} INFO  session - Application started. pid={} session={session} version={} commit={}\n",
         format::timestamp(started),
         std::process::id(),
-        env!("CARGO_PKG_VERSION")
+        crate::VERSION,
+        crate::GIT_COMMIT
     ))?;
     recorder.status.store(2, Ordering::Relaxed);
     let mut dropped = 0;
@@ -36,8 +37,9 @@ pub(super) fn run(
             Message::Event(event) => {
                 if let Some(line) = event.line() {
                     sink.write(&format!(
-                        "{line} session={session} version={}\n",
-                        env!("CARGO_PKG_VERSION")
+                        "{line} session={session} version={} commit={}\n",
+                        crate::VERSION,
+                        crate::GIT_COMMIT
                     ))?;
                 }
             }
@@ -55,8 +57,8 @@ pub(super) fn run(
     report_dropped(&mut sink, recorder, &mut dropped, session)?;
     if healthy_shutdown {
         sink.file.sync_all()?;
-        sink.write(&format!("{} INFO  session - Application shut down cleanly. pid={} session={session} version={}\n",
-            format::timestamp(SystemTime::now()), std::process::id(), env!("CARGO_PKG_VERSION")))?;
+        sink.write(&format!("{} INFO  session - Application shut down cleanly. pid={} session={session} version={} commit={}\n",
+            format::timestamp(SystemTime::now()), std::process::id(), crate::VERSION, crate::GIT_COMMIT))?;
     }
     sink.file.sync_all()
 }
@@ -69,8 +71,8 @@ fn report_dropped(
 ) -> io::Result<()> {
     let total = recorder.dropped.load(Ordering::Relaxed);
     if total != *previous {
-        sink.write(&format!("{} WARN  diagnostics - Diagnostic records were lost because logging could not keep up. This session's log is incomplete. dropped={} total_dropped={} pid={} session={session} version={}\n",
-            format::timestamp(SystemTime::now()), total.saturating_sub(*previous), total, std::process::id(), env!("CARGO_PKG_VERSION")))?;
+        sink.write(&format!("{} WARN  diagnostics - Diagnostic records were lost because logging could not keep up. This session's log is incomplete. dropped={} total_dropped={} pid={} session={session} version={} commit={}\n",
+            format::timestamp(SystemTime::now()), total.saturating_sub(*previous), total, std::process::id(), crate::VERSION, crate::GIT_COMMIT))?;
         *previous = total;
     }
     Ok(())

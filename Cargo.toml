@@ -10,15 +10,31 @@ members = [
 ]
 default-members = ["."]
 
-[package]
-name = "file-tile"
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-publish = false
 license = "MIT"
 authors = ["Michał Kupś"]
 repository = "https://github.com/MRKups/file-tile"
+
+[workspace.dependencies]
+file-tile-core = { path = "crates/core" }
+file-tile-platform-linux = { path = "crates/platform-linux" }
+file-tile-platform-macos = { path = "crates/platform-macos" }
+file-tile-platform-macos-appkit = { path = "crates/platform-macos-appkit" }
+file-tile-platform-windows = { path = "crates/platform-windows" }
+file-tile-ui-iced = { path = "crates/ui-iced" }
+
+[package]
+name = "file-tile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 readme = "README.md"
 description = "A file manager built for working across multiple folders at once."
 keywords = ["file-manager", "file-explorer", "productivity", "iced", "desktop"]
@@ -41,7 +57,7 @@ frameworks = ["target/sparkle/Sparkle.framework"]
 info-plist-path = "target/sparkle/Info.sparkle.plist"
 
 [dependencies]
-file-tile-ui-iced = { path = "crates/ui-iced", version = "=0.1.0" }
+file-tile-ui-iced.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

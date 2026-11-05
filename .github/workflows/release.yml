@@ -23,8 +23,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Verify Apple Silicon runner and tag version match
+      - name: Verify Apple Silicon runner, tag version match, and unreleased version
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           arch_name="$(uname -m)"
@@ -32,7 +33,7 @@ jobs:
             echo "Expected arm64 runner, got $arch_name" >&2
             exit 1
           fi
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          version="$(python3 scripts/build.py --print-version)"
           if [ -n "$RELEASE_TAG" ]; then
             case "$RELEASE_TAG" in
               "v${version}"|"v${version}-"*) ;;
@@ -42,6 +43,16 @@ jobs:
                 ;;
             esac
           fi
+          for candidate_tag in "v${version}" ${RELEASE_TAG:+"$RELEASE_TAG"}; do
+            if git ls-remote --exit-code --tags origin "refs/tags/${candidate_tag}" >/dev/null 2>&1; then
+              echo "Refusing to build: Git tag ${candidate_tag} already exists on origin. Bump [workspace.package].version in Cargo.toml first." >&2
+              exit 1
+            fi
+            if gh release view "${candidate_tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "Refusing to build: GitHub Release ${candidate_tag} already exists. Bump [workspace.package].version in Cargo.toml first." >&2
+              exit 1
+            fi
+          done
 
       - name: Install pinned Rust toolchain
         run: |
@@ -86,6 +97,7 @@ jobs:
           RAW_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          export FILE_TILE_GIT_COMMIT="$(python3 scripts/build.py --print-commit)"
           if [ -n "${RAW_APPLE_SIGNING_IDENTITY}" ]; then
             python3 -c 'import os, pathlib; p = pathlib.Path("Cargo.toml"); p.write_text(p.read_text("utf-8").replace("signing-identity = \"-\"", "signing-identity = \"" + os.environ["RAW_APPLE_SIGNING_IDENTITY"].strip() + "\""), "utf-8")'
           fi
@@ -114,11 +126,13 @@ jobs:
 
       - name: Verify bundle metadata, Sparkle framework, licenses, code signature, and path privacy
         run: |
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          version="$(python3 scripts/build.py --print-version)"
+          expected_commit="$(python3 scripts/build.py --print-commit)"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" target/release/file-tile.app/Contents/Info.plist | grep -qx "15.0"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" target/release/file-tile.app/Contents/Info.plist | grep -qx "com.michalkups.file-tile"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" target/release/file-tile.app/Contents/Info.plist | grep -qx "${version}"
           /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" target/release/file-tile.app/Contents/Info.plist | grep -qx "${version}"
+          /usr/libexec/PlistBuddy -c "Print :FTGitCommit" target/release/file-tile.app/Contents/Info.plist | grep -qx "${expected_commit}"
           /usr/libexec/PlistBuddy -c "Print :SUFeedURL" target/release/file-tile.app/Contents/Info.plist | grep -q "^https://"
           /usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" target/release/file-tile.app/Contents/Info.plist | grep -q "."
           test -d target/release/file-tile.app/Contents/Frameworks/Sparkle.framework
@@ -148,7 +162,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
-          version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+          version="$(python3 scripts/build.py --print-version)"
           tag_or_default="${RELEASE_TAG:-v${version}}"
           mkdir -p target/release/dist
           cp "target/release/file-tile_${version}_aarch64.dmg" "target/release/dist/"

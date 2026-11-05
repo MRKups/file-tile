@@ -8,7 +8,7 @@
 //! Configure, Workspaces, Recovery, Updates, and About).
 
 pub(crate) use file_tile_core::{
-    application, diagnostics, domain, filesystem, persistence, platform,
+    GIT_COMMIT, VERSION, application, diagnostics, domain, filesystem, persistence, platform,
 };
 
 mod boxes;

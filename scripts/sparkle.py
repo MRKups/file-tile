@@ -24,12 +24,55 @@ STAGED_PLIST = CACHE_ROOT / "Info.sparkle.plist"
 STAGED_ENTITLEMENTS = CACHE_ROOT / "Entitlements.plist"
 
 
+def resolve_package_field(cargo: dict[str, object], key: str) -> str:
+    package = cargo.get("package")
+    if not isinstance(package, dict):
+        raise SystemExit("Invalid [package] table in Cargo.toml")
+    value = package.get(key)
+    if isinstance(value, dict) and value.get("workspace") is True:
+        workspace = cargo.get("workspace")
+        if isinstance(workspace, dict) and isinstance(workspace.get("package"), dict):
+            value = workspace["package"].get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"Missing or invalid package.{key} in Cargo.toml")
+    return value.strip()
+
+
+def resolve_git_commit() -> str:
+    explicit = os.environ.get("FILE_TILE_GIT_COMMIT", "").strip()
+    if explicit:
+        return explicit
+    try:
+        sha = subprocess.check_output(
+            ["git", "--no-optional-locks", "rev-parse", "--short=7", "HEAD"],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        if not sha:
+            return "unknown"
+        modified = subprocess.check_output(
+            [
+                "git",
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=normal",
+            ],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return f"{sha}+modified" if modified else sha
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def load_config() -> tuple[str, str, dict[str, object]]:
     with CARGO_TOML.open("rb") as handle:
         cargo = tomllib.load(handle)
-    package = cargo["package"]
-    app_version = str(package["version"])
-    repo_url = str(package["repository"]).rstrip("/")
+    app_version = resolve_package_field(cargo, "version")
+    repo_url = resolve_package_field(cargo, "repository").rstrip("/")
     with SPARKLE_TOML.open("rb") as handle:
         sparkle_cfg = tomllib.load(handle)
     return app_version, repo_url, sparkle_cfg
@@ -138,9 +181,11 @@ def cmd_prepare(_args: argparse.Namespace) -> int:
     ).strip()
     auto_checks = bool(sparkle_cfg.get("automatic_checks_default", False))
 
+    git_commit = resolve_git_commit()
     plist_payload: dict[str, object] = {
         "CFBundleShortVersionString": app_version,
         "CFBundleVersion": app_version,
+        "FTGitCommit": git_commit,
         "SUFeedURL": feed_url,
         "SUEnableAutomaticChecks": auto_checks,
         "NSDesktopFolderUsageDescription": "file-tile needs access to browse files in your Desktop folder.",

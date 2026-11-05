@@ -1,16 +1,16 @@
 [package]
 name = "file-tile-platform-macos"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.99"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 publish = false
-license = "MIT"
-authors = ["Michał Kupś"]
-repository = "https://github.com/MRKups/file-tile"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Safe macOS platform services for file-tile"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-file-tile-platform-macos-appkit = { path = "../platform-macos-appkit", version = "=0.1.0" }
+file-tile-platform-macos-appkit.workspace = true
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = [
     "std",

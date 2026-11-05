@@ -19,7 +19,12 @@ INVISIBLE_UNICODE = re.compile(
     r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\U000e0000-\U000e007f]"
 )
 
+ALLOWED_BUILD_SCRIPTS = {
+    Path("crates/core/build.rs"),
+}
+
 ALLOWED_COMMAND_FILES = {
+    Path("crates/core/build.rs"),
     Path("crates/platform-macos/src/folder_usage.rs"),
     Path("crates/platform-macos/src/opening.rs"),
     Path("crates/platform-macos/src/permissions.rs"),
@@ -40,7 +45,7 @@ SCRIPT_POISON_PATTERNS = (
 
 def tracked_files(root: Path) -> list[Path]:
     result = subprocess.run(
-        ["git", "--no-optional-locks", "ls-files", "-z"],
+        ["git", "--no-optional-locks", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root,
         capture_output=True,
         text=True,
@@ -71,7 +76,7 @@ def check_build_hooks(root: Path, files: list[Path]) -> list[str]:
     errors = []
     for path in files:
         relative = path.relative_to(root)
-        if relative.name == "build.rs":
+        if relative.name == "build.rs" and relative not in ALLOWED_BUILD_SCRIPTS:
             errors.append(f"{relative}: unauthorized Cargo build script (`build.rs`)")
         if relative.parts[:1] == (".cargo",):
             errors.append(f"{relative}: unauthorized `.cargo` configuration override")
