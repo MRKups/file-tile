@@ -31,6 +31,8 @@ pub enum Icon {
     Trash,
     Wrench,
     Github,
+    Scissors,
+    Info,
 }
 
 impl Icon {
@@ -78,11 +80,13 @@ impl Icon {
             Self::Trash => include_bytes!("../../../../assets/icons/ui/trash.svg"),
             Self::Wrench => include_bytes!("../../../../assets/icons/ui/wrench.svg"),
             Self::Github => include_bytes!("../../../../assets/icons/ui/github.svg"),
+            Self::Scissors => include_bytes!("../../../../assets/icons/ui/scissors.svg"),
+            Self::Info => include_bytes!("../../../../assets/icons/ui/info.svg"),
         }
     }
 
     fn handle(self) -> Handle {
-        static HANDLES: OnceLock<[Handle; 22]> = OnceLock::new();
+        static HANDLES: OnceLock<[Handle; 24]> = OnceLock::new();
         HANDLES.get_or_init(|| {
             [
                 Self::Eye,
@@ -107,6 +111,8 @@ impl Icon {
                 Self::Trash,
                 Self::Wrench,
                 Self::Github,
+                Self::Scissors,
+                Self::Info,
             ]
             .map(|icon| Handle::from_memory(icon.bytes()))
         })[self as usize]

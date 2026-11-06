@@ -107,6 +107,37 @@ pub(crate) fn date(value: Option<&Result<FileMetadata, MetadataError>>) -> Strin
         Some(Err(_)) => "Unavailable".into(),
     }
 }
+pub(crate) fn created_date(value: Option<&Result<FileMetadata, MetadataError>>) -> String {
+    match value {
+        None => "Loading…".into(),
+        Some(Ok(metadata)) => metadata
+            .created
+            .and_then(local_datetime)
+            .unwrap_or_else(|| "–".into()),
+        Some(Err(_)) => "Unavailable".into(),
+    }
+}
+pub(crate) fn item_count(value: Option<&Result<FileMetadata, MetadataError>>) -> String {
+    match value {
+        None => "Loading…".into(),
+        Some(Ok(metadata)) => match metadata.item_count {
+            Some(1) => "1 item".into(),
+            Some(count) if count >= 10_000 => "≥10,000 items".into(),
+            Some(count) => format!("{count} items"),
+            None => "–".into(),
+        },
+        Some(Err(_)) => "Unavailable".into(),
+    }
+}
+pub(crate) fn dimensions(value: Option<&Result<FileMetadata, MetadataError>>) -> String {
+    match value {
+        None => "Loading…".into(),
+        Some(Ok(metadata)) => metadata
+            .dimensions
+            .map_or_else(|| "–".into(), |(w, h)| format!("{w} × {h}")),
+        Some(Err(_)) => "Unavailable".into(),
+    }
+}
 #[cfg(target_os = "macos")]
 fn local_datetime(time: SystemTime) -> Option<String> {
     crate::platform::format_local_datetime(time)

@@ -9,12 +9,17 @@ use crate::{
     Desktop, Message,
     boxes::{file_columns, file_entry},
     menus::context_menu,
+    runtime::{metadata, thumbnails},
     widgets::focus_control,
-    window::icons::Icon,
+    window::icons::{self, Icon},
 };
-use iced::widget::{column, container, space};
-use iced::{Element, Point, Task, keyboard};
-use std::{path::PathBuf, sync::Arc};
+use iced::widget::{column, container, mouse_area, opaque, pin, row, space, stack};
+use iced::{Alignment, Border, Element, Fill, Point, Rectangle, Shadow, Task, Vector, keyboard};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 pub(crate) const MENU_ID: &str = "entry-context-menu";
 pub(crate) const OPEN_ID: &str = "entry-context-open";
@@ -22,7 +27,10 @@ pub(crate) const COPY_ID: &str = "entry-context-copy-path";
 pub(crate) const FILE_COPY_ID: &str = "entry-context-copy-files";
 pub(crate) const CUT_ID: &str = "entry-context-cut-files";
 pub(crate) const RENAME_ID: &str = "entry-context-rename";
+pub(crate) const DETAILS_ID: &str = "entry-context-details";
+pub(crate) const DETAILS_CARD_ID: &str = "entry-context-details-card";
 pub(crate) const TRASH_ID: &str = "entry-context-trash";
+const DETAILS_HOVER_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Command {
@@ -31,6 +39,8 @@ pub(crate) enum Command {
     Copy,
     Cut,
     Rename,
+    Details,
+    DetailsHover(bool),
     Trash,
 }
 
@@ -41,6 +51,25 @@ pub(crate) struct Menu {
     listing: Arc<DirectoryListing>,
     position: Point,
     in_preview: bool,
+    pub details_open: bool,
+    details_hover_since: Option<Instant>,
+}
+
+impl Menu {
+    pub(crate) fn is_hover_waiting(&self) -> bool {
+        !self.details_open && self.details_hover_since.is_some()
+    }
+
+    pub(crate) fn tick(&mut self, now: Instant) {
+        if !self.details_open
+            && self
+                .details_hover_since
+                .is_some_and(|since| now.saturating_duration_since(since) >= DETAILS_HOVER_DELAY)
+        {
+            self.details_open = true;
+            self.details_hover_since = None;
+        }
+    }
 }
 
 impl Desktop {
@@ -162,6 +191,8 @@ impl Desktop {
             listing,
             position,
             in_preview,
+            details_open: false,
+            details_hover_since: None,
         };
         let id = if command_enabled(self, &menu, Command::Open) {
             OPEN_ID
@@ -225,6 +256,9 @@ impl Desktop {
             menu.in_preview,
             menu.listing.directory.clone(),
         );
+        if matches!(command, Command::Details | Command::DetailsHover(_)) {
+            return self.handle_details_command(view, path, command);
+        }
         let anchor = menu_bounds(self, menu).position();
         let focus = self.dismiss_entry_menu(generation);
         if command == Command::Rename {
@@ -272,7 +306,9 @@ impl Desktop {
                     self.cut_selected_files(view)
                 }
             }
-            Command::Rename | Command::Trash => Task::none(),
+            Command::Rename | Command::Details | Command::DetailsHover(_) | Command::Trash => {
+                Task::none()
+            }
             Command::CopyPath => path
                 .to_str()
                 .map_or_else(Task::none, |path| write(path.to_owned())),
@@ -290,6 +326,52 @@ impl Desktop {
             }
         };
         Task::batch([task, focus])
+    }
+
+    fn handle_details_command(
+        &mut self,
+        view: ViewId,
+        path: PathBuf,
+        command: Command,
+    ) -> Task<Message> {
+        if let Some(menu) = &mut self.entry_menu {
+            match command {
+                Command::Details => {
+                    menu.details_open = true;
+                    menu.details_hover_since = None;
+                }
+                Command::DetailsHover(true) => {
+                    if !menu.details_open && menu.details_hover_since.is_none() {
+                        menu.details_hover_since = Some(Instant::now());
+                    }
+                }
+                Command::DetailsHover(false) => {
+                    menu.details_hover_since = None;
+                }
+                _ => {}
+            }
+        }
+        if !matches!(command, Command::Details | Command::DetailsHover(true)) {
+            return Task::none();
+        }
+        self.demand_thumbnails(view, std::slice::from_ref(&path));
+        let thumbnails = self.fill_thumbnails();
+        let metadata = if self.application.metadata(view, &path).is_none()
+            && !self
+                .application
+                .metadata_demand_paths(view)
+                .is_some_and(|paths| paths.contains(&path))
+        {
+            let mut paths = self
+                .application
+                .metadata_demand_paths(view)
+                .map_or_else(Vec::new, <[PathBuf]>::to_vec);
+            paths.push(path);
+            self.dispatch(Action::MetadataNeeded(view, paths))
+        } else {
+            Task::none()
+        };
+        Task::batch([thumbnails, metadata])
     }
 
     pub(crate) fn reconcile_entry_menu(&mut self) {
@@ -380,6 +462,7 @@ fn command_enabled(desktop: &Desktop, menu: &Menu, command: Command) -> bool {
                 }
         }
         Command::CopyPath => menu.path.to_str().is_some(),
+        Command::Details | Command::DetailsHover(_) => true,
         Command::Open => match entry.kind {
             EntryKind::Directory => desktop.menu_visible_entry(menu).is_some(),
             EntryKind::File => true,
@@ -438,7 +521,6 @@ fn target_with_open<'a>(
 
 pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
     let palette = desktop.box_palette();
-    let ty = palette.typography;
     let Some((menu, entry)) = desktop
         .entry_menu
         .as_ref()
@@ -446,6 +528,38 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
     else {
         return space().into();
     };
+    let contents = menu_contents(desktop, menu, entry, palette);
+    let rect = menu_bounds(desktop, menu);
+    let surface = context_menu::surface(
+        MENU_ID,
+        contents,
+        rect,
+        Message::DismissEntryMenu(menu.generation),
+        palette,
+    );
+    if !menu.details_open {
+        return surface;
+    }
+    let details_rect = details_bounds(desktop, entry, rect);
+    let details_card = details_view(desktop, menu, entry, details_rect, palette);
+    stack![
+        surface,
+        pin(opaque(details_card))
+            .x(details_rect.x)
+            .y(details_rect.y)
+    ]
+    .width(Fill)
+    .height(Fill)
+    .into()
+}
+
+fn menu_contents<'a>(
+    desktop: &'a Desktop,
+    menu: &'a Menu,
+    entry: &'a DirectoryEntry,
+    palette: crate::window::appearance::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
     let action = |command| {
         command_enabled(desktop, menu, command)
             .then_some(Message::EntryMenuAction(menu.generation, command))
@@ -468,6 +582,11 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
             Command::Open,
         ));
     }
+    let prohibit_delete = desktop
+        .application
+        .workspace()
+        .view(menu.view)
+        .is_some_and(|view| view.settings.prohibit_delete);
     contents = contents
         .push(item(
             RENAME_ID,
@@ -487,7 +606,7 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
         .push(item(
             CUT_ID,
             "entry-context-cut-files-icon",
-            Icon::Move,
+            Icon::Scissors,
             "Cut",
             Command::Cut,
         ))
@@ -498,38 +617,195 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
             "Copy path",
             Command::CopyPath,
         ))
-        .push(context_menu::divider(palette));
-    let trash_action = action(Command::Trash);
-    let prohibit_delete = desktop
-        .application
-        .workspace()
-        .view(menu.view)
-        .is_some_and(|view| view.settings.prohibit_delete);
-    contents = contents.push(context_menu::item(
-        TRASH_ID,
-        "entry-context-trash-icon",
-        Icon::Trash,
-        if prohibit_delete {
-            "Deletion Prohibited"
-        } else {
-            "Move to Trash"
-        },
-        trash_action,
-        palette,
-    ));
-    let guidance = menu_guidance(desktop, menu, entry);
-    if let Some(guidance) = guidance {
+        .push(
+            mouse_area(item(
+                DETAILS_ID,
+                "entry-context-details-icon",
+                Icon::Info,
+                "Details",
+                Command::Details,
+            ))
+            .on_enter(Message::EntryMenuAction(
+                menu.generation,
+                Command::DetailsHover(true),
+            ))
+            .on_exit(Message::EntryMenuAction(
+                menu.generation,
+                Command::DetailsHover(false),
+            )),
+        )
+        .push(context_menu::divider(palette))
+        .push(context_menu::item(
+            TRASH_ID,
+            "entry-context-trash-icon",
+            Icon::Trash,
+            if prohibit_delete {
+                "Deletion Prohibited"
+            } else {
+                "Move to Trash"
+            },
+            action(Command::Trash),
+            palette,
+        ));
+    if let Some(guidance) = menu_guidance(desktop, menu, entry) {
         contents =
             contents.push(container(ty.small(guidance).color(palette.muted)).padding([4, 12]));
     }
-    let rect = menu_bounds(desktop, menu);
-    context_menu::surface(
-        MENU_ID,
-        contents,
-        rect,
-        Message::DismissEntryMenu(menu.generation),
-        palette,
+    contents.into()
+}
+
+fn details_view<'a>(
+    desktop: &'a Desktop,
+    menu: &'a Menu,
+    entry: &'a DirectoryEntry,
+    rect: Rectangle,
+    palette: crate::window::appearance::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
+    let icon = Icon::for_entry(entry);
+    let revision = desktop
+        .views
+        .get(&menu.view)
+        .map_or(0, |state| state.listing_revision);
+    let thumb_size = ty.icon(34.0);
+    let box_size = ty.row(42.0);
+    let preview: Element<'a, Message> = thumbnails::image(
+        Some(&desktop.thumbnails.values),
+        menu.view,
+        revision,
+        &entry.path,
+        thumb_size,
     )
+    .unwrap_or_else(|| icons::view(icon, ty.icon(24.0), Some(palette.icon(icon)), 1.0).into());
+    let icon_badge = container(preview)
+        .width(box_size)
+        .height(box_size)
+        .center_x(box_size)
+        .center_y(box_size)
+        .style(move |_| container::Style {
+            background: Some(palette.row_hover.into()),
+            border: Border {
+                radius: 6.0.into(),
+                ..Border::default()
+            },
+            ..container::Style::default()
+        });
+    let name = entry.name.to_string_lossy().into_owned();
+    let header = container(
+        row![
+            icon_badge,
+            ty.text(name)
+                .font(ty.heading_font())
+                .color(palette.text)
+                .width(Fill)
+                .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .padding([6, 12]);
+    let meta = desktop.application.metadata(menu.view, &entry.path);
+    let size_value = if entry.kind == EntryKind::Directory {
+        folder_size_label(desktop, menu, entry)
+    } else {
+        metadata::size(meta)
+    };
+    let mut list = column![
+        detail_row("Type", details_kind_label(entry), palette),
+        detail_row("Size", size_value, palette),
+    ]
+    .spacing(4);
+    if entry.kind == EntryKind::Directory {
+        list = list.push(detail_row("Items", metadata::item_count(meta), palette));
+    } else if crate::application::contracts::preview::image_candidate(&entry.path) {
+        list = list.push(detail_row(
+            "Dimensions",
+            metadata::dimensions(meta),
+            palette,
+        ));
+    }
+    list = list
+        .push(detail_row("Modified", metadata::date(meta), palette))
+        .push(detail_row("Created", metadata::created_date(meta), palette));
+    let rows = container(list).padding([4, 12]);
+    let style = container::Style {
+        background: Some(palette.contrast_background.into()),
+        ..palette.panel()
+    };
+    container(column![header, context_menu::divider(palette), rows])
+        .id(DETAILS_CARD_ID)
+        .padding([6, 0])
+        .width(rect.width)
+        .height(rect.height)
+        .style(move |_| container::Style {
+            border: Border {
+                radius: 8.0.into(),
+                ..style.border
+            },
+            shadow: Shadow {
+                color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.12),
+                offset: Vector::new(0.0, 4.0),
+                blur_radius: 14.0,
+            },
+            ..style
+        })
+        .into()
+}
+
+fn detail_row<'a>(
+    label: &'static str,
+    value: String,
+    palette: crate::window::appearance::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
+    row![
+        ty.small(label).color(palette.muted).width(ty.row(76.0)),
+        ty.small(value)
+            .color(palette.text)
+            .width(Fill)
+            .wrapping(iced::widget::text::Wrapping::None)
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+fn details_kind_label(entry: &DirectoryEntry) -> String {
+    if entry.symlink {
+        return "Symbolic link".into();
+    }
+    match entry.kind {
+        EntryKind::Directory => "Folder".into(),
+        EntryKind::File => entry
+            .path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .filter(|ext| !ext.is_empty())
+            .map_or_else(
+                || "Document".into(),
+                |ext| format!("{} file", ext.to_ascii_uppercase()),
+            ),
+        EntryKind::Other => "Special item".into(),
+    }
+}
+
+fn folder_size_label(desktop: &Desktop, menu: &Menu, entry: &DirectoryEntry) -> String {
+    let book = desktop.application.folder_usages();
+    let cached = book.get(&entry.path).or_else(|| {
+        menu.listing
+            .entry_target(entry)
+            .and_then(|target| book.get(target))
+    });
+    match cached {
+        Some(Ok(estimate)) => format!(
+            "{}{}",
+            if estimate.partial { "≥" } else { "~" },
+            metadata::decimal_size(estimate.bytes)
+        ),
+        Some(Err(_)) => "Unavailable".into(),
+        None if book.is_pending(&menu.listing.directory) && !entry.symlink => "Calculating…".into(),
+        None => "–".into(),
+    }
 }
 
 fn menu_guidance(desktop: &Desktop, menu: &Menu, entry: &DirectoryEntry) -> Option<&'static str> {
@@ -571,15 +847,51 @@ fn menu_bounds(desktop: &Desktop, menu: &Menu) -> iced::Rectangle {
     let ty = crate::window::typography::Style(desktop.application.typography());
     let entry = desktop.menu_listed_entry(menu);
     let rows = if entry.is_some_and(|entry| entry.kind != EntryKind::Other) {
-        6.0
+        7.0
     } else {
-        5.0
+        6.0
     };
     let guidance = entry.is_some_and(|entry| menu_guidance(desktop, menu, entry).is_some());
+    let prohibit_delete = desktop
+        .application
+        .workspace()
+        .view(menu.view)
+        .is_some_and(|view| view.settings.prohibit_delete);
+    let width = if guidance || prohibit_delete {
+        ty.row(176.0)
+    } else {
+        ty.row(154.0)
+    };
     context_menu::bounds(
         menu.position,
         desktop.size,
-        ty.row(238.0),
+        width,
         30.0 + rows * ty.row(context_menu::ROW_HEIGHT) + if guidance { ty.row(28.0) } else { 0.0 },
     )
+}
+
+fn details_bounds(desktop: &Desktop, entry: &DirectoryEntry, menu_rect: Rectangle) -> Rectangle {
+    let ty = crate::window::typography::Style(desktop.application.typography());
+    let has_extra_row = entry.kind == EntryKind::Directory
+        || crate::application::contracts::preview::image_candidate(&entry.path);
+    let width = ty.row(228.0).min((desktop.size.width - 16.0).max(1.0));
+    let raw_height = if has_extra_row { 180.0 } else { 158.0 };
+    let height = ty
+        .row(raw_height)
+        .min((desktop.size.height - 16.0).max(1.0));
+    let gap = 6.0;
+    let right_x = menu_rect.x + menu_rect.width + gap;
+    let x = if right_x + width <= desktop.size.width - 8.0 {
+        right_x
+    } else {
+        (menu_rect.x - width - gap).max(8.0)
+    };
+    let y = (menu_rect.y + menu_rect.height - height)
+        .clamp(8.0, (desktop.size.height - height - 8.0).max(8.0));
+    Rectangle {
+        x,
+        y,
+        width,
+        height,
+    }
 }

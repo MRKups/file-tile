@@ -20,6 +20,9 @@ fn metadata(desktop: &mut Desktop) {
                     Ok(FileMetadata {
                         bytes: Some(1234),
                         modified: Ok(std::time::UNIX_EPOCH),
+                        created: Some(std::time::UNIX_EPOCH),
+                        item_count: None,
+                        dimensions: None,
                     }),
                 )
             })

@@ -470,11 +470,19 @@ impl Desktop {
     }
 
     fn has_active_entry_motion(&self) -> bool {
-        self.file_drag.is_animating() || self.views.values().any(|state| state.motion.is_some())
+        self.file_drag.is_animating()
+            || self.views.values().any(|state| state.motion.is_some())
+            || self
+                .entry_menu
+                .as_ref()
+                .is_some_and(entry_menu::Menu::is_hover_waiting)
     }
 
     fn tick_entry_motion(&mut self, now: std::time::Instant) {
         self.file_drag.tick(now);
+        if let Some(menu) = &mut self.entry_menu {
+            menu.tick(now);
+        }
         for state in self.views.values_mut() {
             if state
                 .motion

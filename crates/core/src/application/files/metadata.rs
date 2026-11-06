@@ -13,6 +13,9 @@ pub const CACHE_LIMIT: usize = 512;
 pub struct FileMetadata {
     pub bytes: Option<u64>,
     pub modified: Result<SystemTime, MetadataError>,
+    pub created: Option<SystemTime>,
+    pub item_count: Option<u64>,
+    pub dimensions: Option<(u32, u32)>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetadataError {

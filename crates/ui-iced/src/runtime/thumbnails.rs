@@ -59,7 +59,12 @@ impl Desktop {
         let Some(item) = self.application.workspace().view(view) else {
             return;
         };
-        if item.settings.file_view == FileView::List {
+        let menu_target = self
+            .entry_menu
+            .as_ref()
+            .filter(|menu| menu.view == view)
+            .map(|menu| menu.path.as_path());
+        if item.settings.file_view == FileView::List && menu_target.is_none() {
             return;
         }
         let Some(listing) = self.application.load(view).and_then(LoadState::listing) else {
@@ -77,11 +82,16 @@ impl Desktop {
             .iter()
             .filter(|path| {
                 image_candidate(path)
-                    && listing.entry(path).is_some_and(|entry| {
-                        entry.kind == EntryKind::File
-                            && (item.settings.show_hidden || !entry.hidden)
-                    })
-                    && (item.settings.file_view == FileView::Grid || selected == Some(*path))
+                    && listing
+                        .entry(path)
+                        .or_else(|| self.column_previews.entry(view, path))
+                        .is_some_and(|entry| {
+                            entry.kind == EntryKind::File
+                                && (item.settings.show_hidden || !entry.hidden)
+                        })
+                    && (item.settings.file_view == FileView::Grid
+                        || selected == Some(*path)
+                        || menu_target == Some(path.as_path()))
             })
             .take(DEMAND_LIMIT)
             .cloned()
@@ -160,12 +170,16 @@ impl Desktop {
 
     pub(crate) fn fill_thumbnails(&mut self) -> Task<Message> {
         let valid = |key: &Key| {
+            let is_menu_target = self
+                .entry_menu
+                .as_ref()
+                .is_some_and(|menu| menu.view == key.0 && menu.path == key.2);
             self.application.workspace().is_active(key.0)
                 && self
                     .application
                     .workspace()
                     .view(key.0)
-                    .is_some_and(|v| v.settings.file_view != FileView::List)
+                    .is_some_and(|v| v.settings.file_view != FileView::List || is_menu_target)
                 && self
                     .views
                     .get(&key.0)
@@ -174,7 +188,10 @@ impl Desktop {
                     .application
                     .load(key.0)
                     .and_then(LoadState::listing)
-                    .is_some_and(|listing| listing.entry(&key.2).is_some())
+                    .is_some_and(|listing| {
+                        listing.entry(&key.2).is_some()
+                            || self.column_previews.entry(key.0, &key.2).is_some()
+                    })
         };
         self.thumbnails.values.retain(|key, _| valid(key));
         self.thumbnails.pending.retain(|key, _| valid(key));

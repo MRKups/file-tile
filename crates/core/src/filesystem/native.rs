@@ -30,6 +30,15 @@ impl DirectoryReader for NativeDirectory {
         Ok(FileMetadata {
             bytes: metadata.is_file().then_some(metadata.len()),
             modified: metadata.modified().map_err(MetadataError::from_io),
+            created: metadata.created().ok(),
+            item_count: metadata
+                .is_dir()
+                .then(|| read_folder_item_count(path, cancellation))
+                .flatten(),
+            dimensions: metadata
+                .is_file()
+                .then(|| read_image_dimensions(path))
+                .flatten(),
         })
     }
     fn resolve_directory(
@@ -149,4 +158,49 @@ fn entry_kind(kind: fs::FileType) -> EntryKind {
     } else {
         EntryKind::Other
     }
+}
+
+const FOLDER_ITEM_COUNT_LIMIT: u64 = 10_000;
+
+fn read_folder_item_count(path: &Path, cancellation: &Cancellation) -> Option<u64> {
+    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        if name == "Library" {
+            return None;
+        }
+        if matches!(name, "Desktop" | "Documents" | "Downloads")
+            && path.parent().is_some_and(|parent| {
+                crate::platform::permissions::check_folder_access(Some(name), parent)
+                    != crate::platform::permissions::PermissionStatus::Granted
+            })
+        {
+            return None;
+        }
+    }
+    let entries = fs::read_dir(path).ok()?;
+    let mut count = 0_u64;
+    for entry in entries {
+        if cancellation.is_cancelled() {
+            return None;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if entry.file_name() == ".DS_Store" {
+            continue;
+        }
+        count = count.saturating_add(1);
+        if count >= FOLDER_ITEM_COUNT_LIMIT {
+            break;
+        }
+    }
+    Some(count)
+}
+
+fn read_image_dimensions(path: &Path) -> Option<(u32, u32)> {
+    if !crate::application::contracts::preview::image_candidate(path) {
+        return None;
+    }
+    let reader = image::ImageReader::open(path).ok()?;
+    let (width, height) = reader.into_dimensions().ok()?;
+    (width > 0 && height > 0).then_some((width, height))
 }

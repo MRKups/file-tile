@@ -142,6 +142,9 @@ impl DirectoryReader for ControlledDirectory {
         Ok(FileMetadata {
             bytes: (entry.kind == EntryKind::File).then_some(1234),
             modified: Ok(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)),
+            created: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_690_000_000)),
+            item_count: (entry.kind == EntryKind::Directory).then_some(4),
+            dimensions: None,
         })
     }
     fn list(&self, directory: &Path) -> Result<DirectoryListing, DirectoryError> {
