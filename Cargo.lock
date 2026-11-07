@@ -502,9 +502,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-tile-capabilities"
+version = "0.1.0"
+
+[[package]]
 name = "file-tile-core"
 version = "0.1.0"
 dependencies = [
+ "file-tile-capabilities",
  "file-tile-platform-linux",
  "file-tile-platform-macos",
  "file-tile-platform-windows",

@@ -4,7 +4,7 @@ use crate::application::{
     Action, LoadState,
     contracts::directory::{DirectoryEntry, DirectoryListing, EntryKind},
 };
-use crate::domain::ViewId;
+use crate::domain::{ViewId, files::CreateKind};
 use crate::{
     Desktop, Message,
     boxes::{file_columns, file_entry},
@@ -27,6 +27,7 @@ pub(crate) const COPY_ID: &str = "entry-context-copy-path";
 pub(crate) const FILE_COPY_ID: &str = "entry-context-copy-files";
 pub(crate) const CUT_ID: &str = "entry-context-cut-files";
 pub(crate) const RENAME_ID: &str = "entry-context-rename";
+pub(crate) const CREATE_ID: &str = "entry-context-create";
 pub(crate) const DETAILS_ID: &str = "entry-context-details";
 pub(crate) const DETAILS_CARD_ID: &str = "entry-context-details-card";
 pub(crate) const TRASH_ID: &str = "entry-context-trash";
@@ -39,6 +40,9 @@ pub(crate) enum Command {
     Copy,
     Cut,
     Rename,
+    Create,
+    Back,
+    New(CreateKind),
     Details,
     DetailsHover(bool),
     Trash,
@@ -51,6 +55,7 @@ pub(crate) struct Menu {
     listing: Arc<DirectoryListing>,
     position: Point,
     in_preview: bool,
+    pub create: bool,
     pub details_open: bool,
     details_hover_since: Option<Instant>,
 }
@@ -191,6 +196,7 @@ impl Desktop {
             listing,
             position,
             in_preview,
+            create: false,
             details_open: false,
             details_hover_since: None,
         };
@@ -250,7 +256,16 @@ impl Desktop {
         {
             return Task::none();
         }
-        let (view, path, in_preview, directory) = (
+        if matches!(
+            (menu.create, command),
+            (false, Command::Create) | (true, Command::Back)
+        ) {
+            return self.turn_entry_menu_page(matches!(command, Command::Create));
+        }
+        if matches!(command, Command::New(_) | Command::Rename | Command::Trash) {
+            return self.open_entry_prompt(generation, command);
+        }
+        let (view, path, in_preview, _) = (
             menu.view,
             menu.path.clone(),
             menu.in_preview,
@@ -259,38 +274,7 @@ impl Desktop {
         if matches!(command, Command::Details | Command::DetailsHover(_)) {
             return self.handle_details_command(view, path, command);
         }
-        let anchor = menu_bounds(self, menu).position();
         let focus = self.dismiss_entry_menu(generation);
-        if command == Command::Rename {
-            self.anchor_file_prompt(view, anchor);
-            let task = self.start_rename_in(view, directory, path);
-            return if self
-                .views
-                .get(&view)
-                .is_some_and(|state| state.name_draft.is_some())
-            {
-                task
-            } else {
-                Task::batch([task, focus])
-            };
-        }
-        if command == Command::Trash {
-            self.anchor_file_prompt(view, anchor);
-            let task = if in_preview {
-                self.start_trash_paths(view, directory, vec![path])
-            } else {
-                self.start_trash(view)
-            };
-            return if self
-                .views
-                .get(&view)
-                .is_some_and(|state| state.trash_draft.is_some())
-            {
-                task
-            } else {
-                Task::batch([task, focus])
-            };
-        }
         let task = match command {
             Command::Copy => {
                 if in_preview {
@@ -306,9 +290,13 @@ impl Desktop {
                     self.cut_selected_files(view)
                 }
             }
-            Command::Rename | Command::Details | Command::DetailsHover(_) | Command::Trash => {
-                Task::none()
-            }
+            Command::Rename
+            | Command::Create
+            | Command::Back
+            | Command::New(_)
+            | Command::Details
+            | Command::DetailsHover(_)
+            | Command::Trash => Task::none(),
             Command::CopyPath => path
                 .to_str()
                 .map_or_else(Task::none, |path| write(path.to_owned())),
@@ -326,6 +314,51 @@ impl Desktop {
             }
         };
         Task::batch([task, focus])
+    }
+
+    fn turn_entry_menu_page(&mut self, create: bool) -> Task<Message> {
+        let Some(next_gen) = self.next_entry_menu_generation.checked_add(1) else {
+            return Task::none();
+        };
+        self.next_entry_menu_generation = next_gen;
+        if let Some(menu) = &mut self.entry_menu {
+            menu.generation = next_gen;
+            menu.create = create;
+            menu.details_open = false;
+            menu.details_hover_since = None;
+        }
+        iced::widget::operation::focus("context-menu-no-selection")
+    }
+
+    fn open_entry_prompt(&mut self, generation: u64, command: Command) -> Task<Message> {
+        let Some(menu) = &self.entry_menu else {
+            return Task::none();
+        };
+        let (view, path, in_preview, directory) = (
+            menu.view,
+            menu.path.clone(),
+            menu.in_preview,
+            menu.listing.directory.clone(),
+        );
+        let anchor = menu_bounds(self, menu).position();
+        let focus = self.dismiss_entry_menu(generation);
+        self.anchor_file_prompt(view, anchor);
+        let task = match command {
+            Command::New(kind) => self.start_name_in(view, directory, kind),
+            Command::Rename => self.start_rename_in(view, directory, path),
+            Command::Trash if in_preview => self.start_trash_paths(view, directory, vec![path]),
+            Command::Trash => self.start_trash(view),
+            _ => Task::none(),
+        };
+        let opened = self
+            .views
+            .get(&view)
+            .is_some_and(|state| state.name_draft.is_some() || state.trash_draft.is_some());
+        if opened {
+            task
+        } else {
+            Task::batch([task, focus])
+        }
     }
 
     fn handle_details_command(
@@ -407,6 +440,21 @@ fn command_enabled(desktop: &Desktop, menu: &Menu, command: Command) -> bool {
         return false;
     };
     match command {
+        Command::Back => menu.create,
+        Command::Create => {
+            !menu.create
+                && desktop.application.workspace().mode() == crate::domain::Mode::Browse
+                && desktop
+                    .application
+                    .can_write_folder(menu.view, &menu.listing.directory)
+        }
+        Command::New(_) => {
+            menu.create
+                && desktop.application.workspace().mode() == crate::domain::Mode::Browse
+                && desktop
+                    .application
+                    .can_write_folder(menu.view, &menu.listing.directory)
+        }
         Command::Rename => {
             (entry.kind != EntryKind::Other || entry.symlink)
                 && (menu.in_preview
@@ -559,6 +607,9 @@ fn menu_contents<'a>(
     entry: &'a DirectoryEntry,
     palette: crate::window::appearance::Palette,
 ) -> Element<'a, Message> {
+    if menu.create {
+        return create_menu_contents(desktop, menu, palette);
+    }
     let ty = palette.typography;
     let action = |command| {
         command_enabled(desktop, menu, command)
@@ -587,6 +638,11 @@ fn menu_contents<'a>(
         .workspace()
         .view(menu.view)
         .is_some_and(|view| view.settings.prohibit_delete);
+    let trash_label = if prohibit_delete {
+        "Deletion Prohibited"
+    } else {
+        "Move to Trash"
+    };
     contents = contents
         .push(item(
             RENAME_ID,
@@ -594,6 +650,13 @@ fn menu_contents<'a>(
             Icon::Rename,
             "Rename",
             Command::Rename,
+        ))
+        .push(item(
+            CREATE_ID,
+            "entry-context-create-icon",
+            Icon::Document,
+            "Create",
+            Command::Create,
         ))
         .push(context_menu::divider(palette))
         .push(item(
@@ -617,39 +680,82 @@ fn menu_contents<'a>(
             "Copy path",
             Command::CopyPath,
         ))
-        .push(
-            mouse_area(item(
+        .push(details_menu_item(
+            menu.generation,
+            item(
                 DETAILS_ID,
                 "entry-context-details-icon",
                 Icon::Info,
                 "Details",
                 Command::Details,
-            ))
-            .on_enter(Message::EntryMenuAction(
-                menu.generation,
-                Command::DetailsHover(true),
-            ))
-            .on_exit(Message::EntryMenuAction(
-                menu.generation,
-                Command::DetailsHover(false),
-            )),
-        )
+            ),
+        ))
         .push(context_menu::divider(palette))
-        .push(context_menu::item(
+        .push(item(
             TRASH_ID,
             "entry-context-trash-icon",
             Icon::Trash,
-            if prohibit_delete {
-                "Deletion Prohibited"
-            } else {
-                "Move to Trash"
-            },
-            action(Command::Trash),
-            palette,
+            trash_label,
+            Command::Trash,
         ));
     if let Some(guidance) = menu_guidance(desktop, menu, entry) {
         contents =
             contents.push(container(ty.small(guidance).color(palette.muted)).padding([4, 12]));
+    }
+    contents.into()
+}
+
+fn details_menu_item<'a>(generation: u64, row: Element<'a, Message>) -> Element<'a, Message> {
+    mouse_area(row)
+        .on_enter(Message::EntryMenuAction(
+            generation,
+            Command::DetailsHover(true),
+        ))
+        .on_exit(Message::EntryMenuAction(
+            generation,
+            Command::DetailsHover(false),
+        ))
+        .into()
+}
+
+fn create_menu_contents<'a>(
+    desktop: &'a Desktop,
+    menu: &'a Menu,
+    palette: crate::window::appearance::Palette,
+) -> Element<'a, Message> {
+    let writable = desktop
+        .application
+        .can_write_folder(menu.view, &menu.listing.directory);
+    let mut contents = column![context_menu::item(
+        "entry-menu-back",
+        "entry-menu-back-icon",
+        Icon::Back,
+        "Back",
+        Some(Message::EntryMenuAction(menu.generation, Command::Back)),
+        palette,
+    )];
+    for (kind, id) in CreateKind::ALL.into_iter().zip([
+        "entry-create-folder",
+        "entry-create-text",
+        "entry-create-markdown",
+        "entry-create-json",
+    ]) {
+        contents = contents.push(context_menu::item_with_suffix(
+            id,
+            format!("{id}-icon"),
+            if kind == CreateKind::Folder {
+                Icon::Folder
+            } else {
+                Icon::Document
+            },
+            kind.label(),
+            kind.dot_extension(),
+            writable.then_some(Message::EntryMenuAction(
+                menu.generation,
+                Command::New(kind),
+            )),
+            palette,
+        ));
     }
     contents.into()
 }
@@ -845,11 +951,19 @@ fn menu_guidance(desktop: &Desktop, menu: &Menu, entry: &DirectoryEntry) -> Opti
 
 fn menu_bounds(desktop: &Desktop, menu: &Menu) -> iced::Rectangle {
     let ty = crate::window::typography::Style(desktop.application.typography());
+    if menu.create {
+        return context_menu::bounds(
+            menu.position,
+            desktop.size,
+            ty.row(190.0),
+            12.0 + 5.0 * ty.row(context_menu::ROW_HEIGHT),
+        );
+    }
     let entry = desktop.menu_listed_entry(menu);
     let rows = if entry.is_some_and(|entry| entry.kind != EntryKind::Other) {
-        7.0
+        8.0
     } else {
-        6.0
+        7.0
     };
     let guidance = entry.is_some_and(|entry| menu_guidance(desktop, menu, entry).is_some());
     let prohibit_delete = desktop

@@ -36,6 +36,7 @@ pub struct DirectoryListing {
     /// Nonempty means incomplete, even when no usable entries remain.
     pub issues: Vec<DirectoryIssue>,
     resolved_links: std::collections::HashMap<PathBuf, PathBuf>,
+    capabilities: crate::domain::FolderCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +86,17 @@ impl DirectoryListing {
             path_indices: path_indices.into(),
             issues,
             resolved_links: std::collections::HashMap::new(),
+            capabilities: crate::domain::FolderCapabilities::default(),
         }
+    }
+
+    pub fn with_capabilities(mut self, capabilities: crate::domain::FolderCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn capabilities(&self) -> &crate::domain::FolderCapabilities {
+        &self.capabilities
     }
 
     pub fn entries(&self) -> &[DirectoryEntry] {

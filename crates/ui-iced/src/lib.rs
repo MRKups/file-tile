@@ -174,6 +174,7 @@ enum Message {
     AppFontExplorer(app_settings::FontExplorerEdit),
     AppTypographyChanged(crate::application::preferences::typography::TypographyPreferences),
     AppAccessSafetyEdited(app_settings::AccessSafetyEdit),
+    AppCapabilitiesChanged(crate::domain::CapabilityPreferences),
     ApplyAppSettings,
     CancelAppSettings,
     BoxFolderChanged(ViewId, String),
@@ -700,6 +701,7 @@ impl Desktop {
             | Message::AppFontExplorer(_)
             | Message::AppTypographyChanged(_)
             | Message::AppAccessSafetyEdited(_)
+            | Message::AppCapabilitiesChanged(_)
             | Message::ChooseAppFolder
             | Message::AppFolderChosen(..)
             | Message::ApplyAppSettings

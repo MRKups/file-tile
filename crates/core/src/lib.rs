@@ -15,6 +15,8 @@ pub use file_tile_platform_macos as platform;
 #[cfg(target_os = "windows")]
 pub use file_tile_platform_windows as platform;
 
+pub use file_tile_capabilities as capabilities;
+
 pub mod application;
 pub mod diagnostics;
 pub mod domain;

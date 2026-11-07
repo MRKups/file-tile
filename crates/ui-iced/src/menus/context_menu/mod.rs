@@ -158,24 +158,38 @@ pub(crate) fn item<'a>(
     action: Option<Message>,
     palette: a::Palette,
 ) -> Element<'a, Message> {
+    item_with_suffix(id, icon_id, icon, label, None, action, palette)
+}
+
+pub(crate) fn item_with_suffix<'a>(
+    id: &'static str,
+    icon_id: impl Into<iced::advanced::widget::Id>,
+    icon: icons::Icon,
+    label: &'static str,
+    suffix: Option<&'static str>,
+    action: Option<Message>,
+    palette: a::Palette,
+) -> Element<'a, Message> {
     let ty = palette.typography;
     let enabled = action.is_some();
-    let label = container(
-        row![
-            container(icons::view(
-                icon,
-                14.0,
-                Some(if enabled { palette.text } else { palette.muted }),
-                1.0
-            ))
-            .id(icon_id),
-            ty.text(label),
-        ]
-        .spacing(8)
-        .align_y(Center),
-    )
-    .width(Fill)
-    .center_y(Fill);
+    let mut row_content = row![
+        container(icons::view(
+            icon,
+            14.0,
+            Some(if enabled { palette.text } else { palette.muted }),
+            1.0
+        ))
+        .id(icon_id),
+        ty.text(label),
+    ]
+    .spacing(8)
+    .align_y(Center);
+    if let Some(suffix) = suffix {
+        row_content = row_content
+            .push(space().width(Fill))
+            .push(ty.small(suffix).color(palette.muted));
+    }
+    let label = container(row_content).width(Fill).center_y(Fill);
     let control = button(label)
         .width(Fill)
         .height(ty.row(ROW_HEIGHT))

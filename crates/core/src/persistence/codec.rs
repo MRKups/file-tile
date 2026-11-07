@@ -76,10 +76,42 @@ struct PreferencesRecord {
     appearance: Value,
     typography: Value,
     safety: Value,
+    #[serde(default)]
+    capabilities: Option<Value>,
 }
 
 const fn default_true() -> bool {
     true
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilitiesRecord {
+    #[serde(default = "default_true")]
+    git: bool,
+    #[serde(default = "default_true")]
+    python: bool,
+    #[serde(default = "default_true")]
+    node: bool,
+    #[serde(default = "default_true")]
+    rust: bool,
+    #[serde(default = "default_true")]
+    go: bool,
+    #[serde(default = "default_true")]
+    env_files: bool,
+}
+
+impl From<crate::domain::CapabilityPreferences> for CapabilitiesRecord {
+    fn from(capabilities: crate::domain::CapabilityPreferences) -> Self {
+        Self {
+            git: capabilities.git,
+            python: capabilities.python,
+            node: capabilities.node,
+            rust: capabilities.rust,
+            go: capabilities.go,
+            env_files: capabilities.env_files,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -198,6 +230,7 @@ fn preferences(
         crate::application::preferences::typography::TypographyPreferences::default()
     });
     let safety = restore_safety(record.safety, issues);
+    let capabilities = restore_capabilities(record.capabilities, issues);
     Ok(ConfigurationDocument::Preferences(AppPreferences {
         last_workspace_id,
         window,
@@ -205,7 +238,35 @@ fn preferences(
         appearance,
         typography,
         safety,
+        capabilities,
     }))
+}
+
+fn restore_capabilities(
+    value: Option<Value>,
+    issues: &mut Vec<RecoveryIssue>,
+) -> crate::domain::CapabilityPreferences {
+    let Some(value) = value else {
+        return crate::domain::CapabilityPreferences::default();
+    };
+    serde_json::from_value::<CapabilitiesRecord>(value)
+        .ok()
+        .map(|record| crate::domain::CapabilityPreferences {
+            git: record.git,
+            python: record.python,
+            node: record.node,
+            rust: record.rust,
+            go: record.go,
+            env_files: record.env_files,
+        })
+        .unwrap_or_else(|| {
+            issue(
+                issues,
+                0,
+                "invalid capability preferences; using default capabilities for viewing only",
+            );
+            crate::domain::CapabilityPreferences::default()
+        })
 }
 
 fn restore_safety(
@@ -677,6 +738,10 @@ impl Serialize for DocumentRef<'_> {
                     &super::typography::TypographyRecord::from(preferences.typography),
                 )?;
                 map.serialize_entry("safety", &SafetyRecord::from(preferences.safety))?;
+                map.serialize_entry(
+                    "capabilities",
+                    &CapabilitiesRecord::from(preferences.capabilities),
+                )?;
             }
             ConfigurationDocument::WorkspaceIndex(index) => {
                 map.serialize_entry("workspaces", &Summaries(&index.workspaces))?;

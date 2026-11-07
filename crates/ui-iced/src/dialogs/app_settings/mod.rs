@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod access_safety;
 mod appearance;
+mod capabilities;
 mod controls;
 mod custom_themes;
 mod focus;
@@ -46,6 +47,7 @@ pub(crate) struct Draft {
     font_explorer: Option<font_explorer::ExplorerDraft>,
     safety: crate::domain::SafetyPreferences,
     access_safety: access_safety::AccessSafetyDraft,
+    capabilities: crate::domain::CapabilityPreferences,
     return_focus: Option<ViewId>,
 }
 
@@ -70,6 +72,7 @@ impl Draft {
                 .matches(application.appearance(), application.user_themes())
             || self.typography != application.typography()
             || self.safety != application.safety()
+            || self.capabilities != application.capabilities()
     }
 
     pub(crate) fn observe_system_appearance(
@@ -227,6 +230,12 @@ impl Desktop {
                 }
                 Task::none()
             }
+            Message::AppCapabilitiesChanged(capabilities) => {
+                if let Some(draft) = &mut self.app_settings {
+                    draft.capabilities = capabilities;
+                }
+                Task::none()
+            }
             Message::ApplyAppSettings => self.apply_app_settings(),
             Message::CancelAppSettings => {
                 let focus = self.take_settings_focus();
@@ -266,6 +275,7 @@ impl Desktop {
             font_explorer: None,
             safety: self.application.safety(),
             access_safety: access_safety::AccessSafetyDraft::new(&self.application, probe_os),
+            capabilities: self.application.capabilities(),
             return_focus: self.focused_path.take(),
         };
         self.focus_version = self.focus_version.saturating_add(1);
@@ -314,12 +324,14 @@ impl Desktop {
         let focus = draft.return_focus;
         let typography = draft.typography;
         let safety = draft.safety;
+        let capabilities = draft.capabilities;
         let task = self.dispatch(Action::ApplyAppSettings {
             new_box_folder: folder,
             appearance,
             user_themes,
             typography,
             safety,
+            capabilities,
         });
         if !self.application.app_settings_open() {
             return Task::batch([task, self.restore_workspace_focus(focus)]);
@@ -635,6 +647,7 @@ pub(crate) mod tests {
                         appearance: Default::default(),
                         typography: Default::default(),
                         safety: Default::default(),
+                        capabilities: Default::default(),
                     },
                     index: WorkspaceIndex {
                         workspaces: vec![WorkspaceSummary {

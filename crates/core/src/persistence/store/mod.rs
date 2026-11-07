@@ -210,6 +210,7 @@ impl Store {
                 appearance: Default::default(),
                 typography: Default::default(),
                 safety: Default::default(),
+                capabilities: Default::default(),
             }),
         ] {
             let key = match &document {

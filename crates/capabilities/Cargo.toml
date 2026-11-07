@@ -1,0 +1,27 @@
+[package]
+name = "file-tile-capabilities"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Modular read-only folder capability detectors for file-tile"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+too_many_lines = "warn"
+unnecessary_wraps = "warn"
+unused_async = "warn"

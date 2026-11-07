@@ -180,6 +180,7 @@ fn boxes<'a>(
                 sort_open: presentation.sort_menu == Some(view),
                 dragging: presentation.file_drag.dragged_set(view),
                 column_preview: presentation.column_previews.get(view),
+                capabilities: application.capabilities(),
             }))
             .x(rect.x)
             .y(rect.y),

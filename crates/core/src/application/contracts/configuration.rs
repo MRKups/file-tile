@@ -49,6 +49,7 @@ pub struct AppPreferences {
     pub appearance: crate::application::preferences::appearance::AppearancePreferences,
     pub typography: crate::application::preferences::typography::TypographyPreferences,
     pub safety: crate::domain::SafetyPreferences,
+    pub capabilities: crate::domain::CapabilityPreferences,
 }
 
 pub const MAX_PATH_BYTES: usize = 4096;

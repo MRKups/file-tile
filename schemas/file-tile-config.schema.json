@@ -20,7 +20,8 @@
         "new_box_folder": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] },
         "appearance": { "$ref": "#/$defs/appearance" },
         "typography": { "$ref": "#/$defs/typography" },
-        "safety": { "$ref": "#/$defs/safety" }
+        "safety": { "$ref": "#/$defs/safety" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
       },
       "required": ["last_workspace_id", "window", "new_box_folder", "appearance", "typography", "safety"]
     },
@@ -110,6 +111,26 @@
         "system_folders",
         "applications",
         "credentials"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "git": { "type": "boolean" },
+        "python": { "type": "boolean" },
+        "node": { "type": "boolean" },
+        "rust": { "type": "boolean" },
+        "go": { "type": "boolean" },
+        "env_files": { "type": "boolean" }
+      },
+      "required": [
+        "git",
+        "python",
+        "node",
+        "rust",
+        "go",
+        "env_files"
       ],
       "additionalProperties": false
     },

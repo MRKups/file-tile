@@ -27,4 +27,7 @@ pub mod safety;
 pub mod sorting;
 pub mod validation;
 
+pub use file_tile_capabilities::{
+    CapabilityItem, CapabilityKind, CapabilityPreferences, FolderCapabilities,
+};
 pub use safety::{ProtectedAccess, SafetyPolicy, SafetyPreferences};

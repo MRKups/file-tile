@@ -59,6 +59,7 @@ pub(in crate::application) fn boot(
                 appearance: Default::default(),
                 typography: Default::default(),
                 safety: Default::default(),
+                capabilities: Default::default(),
             },
             index: WorkspaceIndex {
                 workspaces: vec![WorkspaceSummary {

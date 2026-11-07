@@ -47,6 +47,7 @@ pub struct Props<'a> {
     pub sort_open: bool,
     pub dragging: Option<&'a std::collections::HashSet<std::path::PathBuf>>,
     pub column_preview: Option<&'a crate::boxes::file_columns::ViewPreview>,
+    pub capabilities: crate::domain::CapabilityPreferences,
 }
 
 /// Normal boxes pin header/status and scroll only entries. Tiny boxes scroll the
@@ -115,11 +116,7 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
         palette,
         box_rect.size(),
     );
-    let outside_press = props
-        .presentation
-        .filter(|state| state.name_draft.is_none())
-        .and_then(|state| state.trash_draft.as_ref())
-        .map(|draft| Message::TrashPrompt(active.view, draft.generation, false));
+    let outside_press = crate::menus::file_prompt::outside_press(active.view, props.presentation);
     let box_seed = props.item.id.0;
     let mut layers = Stack::new();
     if let Some(texture) = a::surface_texture::overlay(palette, box_seed) {
@@ -184,18 +181,19 @@ fn with_tab_rail<'a>(
 }
 
 fn status<'a>(props: &Props<'a>) -> Element<'a, Message> {
-    folder_status::view(
-        props.load,
-        props
+    folder_status::view(folder_status::Props {
+        load: props.load,
+        hint: props
             .tab_error
             .or(props.opening_status)
             .or_else(|| props.presentation.and_then(|state| state.hint.as_deref())),
-        props.watch,
-        props.item.settings.show_hidden,
-        props.palette,
-        props.sort_status,
-        props.usage,
-    )
+        watch: props.watch,
+        show_hidden: props.item.settings.show_hidden,
+        palette: props.palette,
+        sort_status: props.sort_status,
+        usage: props.usage,
+        capabilities: props.capabilities,
+    })
 }
 
 fn contents<'a>(
@@ -254,7 +252,7 @@ fn contents<'a>(
         dragging: props.dragging,
         column_preview: props.column_preview,
     };
-    let footer = status(props);
+    let footer = crate::menus::folder_menu::target(active.view, props.interactive, status(props));
     if compact {
         compact_contents(
             props,

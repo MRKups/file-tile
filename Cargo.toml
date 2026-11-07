@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/capabilities",
     "crates/core",
     "crates/platform-linux",
     "crates/platform-macos",
@@ -19,6 +20,7 @@ authors = ["Michał Kupś"]
 repository = "https://github.com/MRKups/file-tile"
 
 [workspace.dependencies]
+file-tile-capabilities = { path = "crates/capabilities" }
 file-tile-core = { path = "crates/core" }
 file-tile-platform-linux = { path = "crates/platform-linux" }
 file-tile-platform-macos = { path = "crates/platform-macos" }

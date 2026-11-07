@@ -218,16 +218,21 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
             "create-markdown",
             "create-json",
         ]) {
-            contents = contents.push(item(
+            contents = contents.push(context_menu::item_with_suffix(
                 id,
+                format!("{id}-icon"),
                 if kind == CreateKind::Folder {
                     Icon::Folder
                 } else {
                     Icon::Document
                 },
                 kind.label(),
-                Command::New(kind),
-                writable,
+                kind.dot_extension(),
+                writable.then_some(Message::FolderMenuAction(
+                    menu.generation,
+                    Command::New(kind),
+                )),
+                palette,
             ));
         }
         contents

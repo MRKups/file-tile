@@ -119,6 +119,7 @@ pub enum Action {
         user_themes: Vec<appearance::UserTheme>,
         typography: typography::TypographyPreferences,
         safety: crate::domain::SafetyPreferences,
+        capabilities: crate::domain::CapabilityPreferences,
     },
 }
 

@@ -41,9 +41,15 @@ impl Application {
                 user_themes,
                 typography,
                 safety,
-            } => {
-                self.apply_app_settings(new_box_folder, appearance, user_themes, typography, safety)
-            }
+                capabilities,
+            } => self.apply_app_settings(
+                new_box_folder,
+                appearance,
+                user_themes,
+                typography,
+                safety,
+                capabilities,
+            ),
             Action::CancelAppSettings => {
                 if self.app_settings_open() {
                     self.configuration_editor = None;
@@ -111,6 +117,13 @@ impl Application {
             .unwrap_or_default()
     }
 
+    pub fn capabilities(&self) -> crate::domain::CapabilityPreferences {
+        self.configuration
+            .as_ref()
+            .map(|(preferences, _)| preferences.capabilities)
+            .unwrap_or_default()
+    }
+
     pub fn new_box_folder(&self) -> &Path {
         self.directory_override
             .as_deref()
@@ -140,6 +153,7 @@ impl Application {
         user_themes: Vec<UserTheme>,
         typography: crate::application::preferences::typography::TypographyPreferences,
         safety: crate::domain::SafetyPreferences,
+        capabilities: crate::domain::CapabilityPreferences,
     ) -> Vec<Effect> {
         let valid_choice = |choice: ThemeChoice| match choice {
             ThemeChoice::Preset(_) => true,
@@ -167,11 +181,13 @@ impl Application {
             || preferences.new_box_folder != new_box_folder
             || preferences.appearance != appearance
             || preferences.typography != typography
-            || preferences.safety != safety;
+            || preferences.safety != safety
+            || preferences.capabilities != capabilities;
         preferences.new_box_folder = new_box_folder;
         preferences.appearance = appearance;
         preferences.typography = typography;
         preferences.safety = safety;
+        preferences.capabilities = capabilities;
         if themes_changed {
             self.user_themes = std::sync::Arc::from(user_themes);
             self.user_themes_edited = true;

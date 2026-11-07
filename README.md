@@ -86,7 +86,7 @@ CI=true cargo packager --release
 
 `file-tile` writes application data to `~/Library/Application Support/file-tile/`:
 
-- `config/preferences.json`: saved window bounds, appearance, typography, and safety settings.
+- `config/preferences.json`: saved window bounds, appearance, typography, safety, and capability settings.
 - `config/workspaces.json`: ordered workspace index and workspace names.
 - `config/workspace-<uuid>.json`: saved boxes, shortcut tiles, tabs, and navigation history for each workspace.
 - `config/user-themes.json`: custom user themes (created when you save a custom theme).
