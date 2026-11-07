@@ -21,10 +21,10 @@ impl Desktop {
             Some(self.recovery_input(event.clone()))
         } else if self.workspace_management.is_some() {
             Some(self.workspace_management_input(event.clone()))
-        } else if self.app_settings.is_some() {
-            Some(self.app_settings_input(event.clone(), status))
         } else if self.about.is_some() {
             Some(self.about_input(event.clone()))
+        } else if self.app_settings.is_some() {
+            Some(self.app_settings_input(event.clone(), status))
         } else if self.sort_menu.is_some() {
             if matches!(
                 event,

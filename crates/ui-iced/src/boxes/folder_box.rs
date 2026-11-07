@@ -113,8 +113,13 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
         props.conflict_name,
         props.files_closing,
         palette,
-        box_rect.height,
+        box_rect.size(),
     );
+    let outside_press = props
+        .presentation
+        .filter(|state| state.name_draft.is_none())
+        .and_then(|state| state.trash_draft.as_ref())
+        .map(|draft| Message::TrashPrompt(active.view, draft.generation, false));
     let box_seed = props.item.id.0;
     let mut layers = Stack::new();
     if let Some(texture) = a::surface_texture::overlay(palette, box_seed) {
@@ -131,6 +136,7 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
         );
         layers = layers.push(crate::menus::file_prompt::anchored(
             props.presentation.and_then(|state| state.prompt_anchor),
+            outside_press,
             prompt,
         ));
     }

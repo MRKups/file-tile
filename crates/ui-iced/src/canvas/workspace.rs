@@ -131,7 +131,25 @@ fn overlay<'a>(
         ]
         .into()
     } else if let Some(draft) = &desktop.app_settings {
-        stack![surface, opaque(app_settings::view(desktop, draft))].into()
+        let settings = crate::widgets::input_boundary::view(
+            desktop.about.is_some(),
+            opaque(app_settings::view(desktop, draft)),
+        );
+        if let Some(state) = &desktop.about {
+            stack![
+                surface,
+                settings,
+                opaque(crate::dialogs::about::view(
+                    state,
+                    &desktop.updates,
+                    desktop.size,
+                    palette,
+                ))
+            ]
+            .into()
+        } else {
+            stack![surface, settings, iced::widget::space()].into()
+        }
     } else if let Some(state) = &desktop.about {
         stack![
             surface,

@@ -134,7 +134,7 @@ impl Desktop {
     fn menu_state(&self) -> MenuState {
         let recovery_blocking = self.storage_details && self.application.storage_detail().is_some();
         MenuState {
-            about_enabled: self.workspace_input_enabled(),
+            about_enabled: self.can_open_about(),
             check_updates_enabled: self.updates.can_check()
                 && self.native_menu.error.is_none()
                 && !recovery_blocking

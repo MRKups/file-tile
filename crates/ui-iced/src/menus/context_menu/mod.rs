@@ -44,6 +44,7 @@ impl Desktop {
     pub(crate) fn prepare_context_menu(&mut self) {
         self.focus_version = self.focus_version.saturating_add(1);
         self.focused_path = None;
+        self.clear_trash_drafts();
         if let Some(draft) = &mut self.box_settings {
             draft.focused = false;
             draft.range.focused = None;

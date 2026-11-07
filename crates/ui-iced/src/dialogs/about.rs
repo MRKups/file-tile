@@ -71,17 +71,35 @@ impl Drop for State {
 }
 
 impl Desktop {
+    pub(crate) fn can_open_about(&self) -> bool {
+        let recovery_blocking = self.storage_details && self.application.storage_detail().is_some();
+        self.application.accepts_edits()
+            && self.native_menu.error().is_none()
+            && !recovery_blocking
+            && self.about.is_none()
+            && self.workspace_management.is_none()
+            && !self.settings_picker.pending()
+            && !self.context_menu_open()
+    }
+
     pub(crate) fn about_message(&mut self, action: Action) -> Task<Message> {
         match action {
             Action::Open => {
-                if !self.workspace_input_enabled() {
+                if !self.can_open_about() {
                     return Task::none();
                 }
                 self.clear_context_menus();
+                if let Some(draft) = &mut self.app_settings {
+                    draft.close_transient_menus();
+                }
                 self.about = Some(State {
                     pending: None,
                     error: None,
-                    return_focus: self.focused_path.take(),
+                    return_focus: if self.app_settings.is_some() {
+                        None
+                    } else {
+                        self.focused_path.take()
+                    },
                 });
                 self.focus_version = self.focus_version.saturating_add(1);
                 self.pointer = None;
@@ -109,6 +127,9 @@ impl Desktop {
             return Task::none();
         };
         self.focus_version = self.focus_version.saturating_add(1);
+        if let Some(draft) = &self.app_settings {
+            return draft.restore_focus_after_overlay();
+        }
         state
             .return_focus
             .filter(|view| self.file_view_input_enabled(*view))

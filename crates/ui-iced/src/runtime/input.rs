@@ -307,6 +307,7 @@ impl Desktop {
             ) => {
                 self.window_drag = WindowDrag::Idle;
                 self.clear_context_menus();
+                self.clear_trash_drafts();
                 // Subscriptions can arrive after a live-resize redraw. The root
                 // sensor owns size; queued window events only cancel gestures.
                 self.pointer = None;
@@ -317,6 +318,7 @@ impl Desktop {
                 self.window_drag = WindowDrag::Idle;
                 self.modifiers = keyboard::Modifiers::empty();
                 self.clear_context_menus();
+                self.clear_trash_drafts();
                 self.pointer = None;
                 self.cancel_card_drag();
                 self.focused_path = None;

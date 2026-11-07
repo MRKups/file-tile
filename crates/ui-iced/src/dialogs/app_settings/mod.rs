@@ -88,6 +88,21 @@ impl Draft {
     pub(crate) fn clear_picker(&mut self) {
         self.picker = None;
     }
+
+    pub(crate) fn close_transient_menus(&mut self) {
+        self.font_picker_open = false;
+        self.font_picker_cursor = None;
+    }
+
+    pub(crate) fn restore_focus_after_overlay(&self) -> Task<Message> {
+        if self.appearance.custom_themes_open() {
+            operation::focus(custom_themes::CANCEL_ID)
+        } else if self.font_explorer.is_some() {
+            operation::focus(font_explorer::SEARCH_ID)
+        } else {
+            operation::focus("app-settings-cancel")
+        }
+    }
 }
 
 impl Desktop {
@@ -163,6 +178,9 @@ impl Desktop {
     }
 
     pub(crate) fn app_settings_message(&mut self, message: Message) -> Task<Message> {
+        if self.about.is_some() && !matches!(message, Message::AppFolderChosen(..)) {
+            return Task::none();
+        }
         match message {
             Message::OpenAppSettings => self.open_app_settings(),
             Message::AppSettingsChanged(folder) => {

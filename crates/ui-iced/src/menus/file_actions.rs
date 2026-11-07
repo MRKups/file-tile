@@ -70,6 +70,12 @@ pub(crate) fn name_id(view: ViewId) -> String {
 }
 
 impl Desktop {
+    pub(crate) fn clear_trash_drafts(&mut self) {
+        for state in self.views.values_mut() {
+            state.trash_draft = None;
+        }
+    }
+
     pub(crate) fn anchor_file_prompt(&mut self, view: ViewId, point: iced::Point) {
         let geometry = self.geometry();
         let anchor = self
