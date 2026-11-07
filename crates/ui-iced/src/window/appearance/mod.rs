@@ -298,6 +298,7 @@ pub fn theme_for(palette: Palette) -> Theme {
     )
 }
 
+#[cfg(test)]
 pub fn theme() -> Theme {
     theme_for(resolve(Default::default()).window)
 }

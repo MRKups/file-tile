@@ -439,7 +439,6 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
         .subscription(Desktop::subscription)
         .title("file-tile")
         .window(window_shell::settings())
-        .theme(appearance::theme())
         .style(|desktop: &Desktop, _| {
             let palettes = appearance::resolve(desktop.preview_appearance());
             iced::theme::Style {
