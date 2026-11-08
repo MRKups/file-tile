@@ -1,10 +1,9 @@
 //! Python virtual environment, version, and package manager detection.
 
-use std::path::{Path, PathBuf};
-
+use crate::scan::DirSnapshot;
 use crate::{CapabilityItem, CapabilityKind, scan};
 
-pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
+pub fn detect(ancestors: &[DirSnapshot]) -> Option<CapabilityItem> {
     for dir in ancestors {
         if let Some(item) = inspect_directory(dir) {
             return Some(item);
@@ -13,12 +12,13 @@ pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
     None
 }
 
-fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
+fn inspect_directory(dir: &DirSnapshot) -> Option<CapabilityItem> {
     let venv_version = read_pyvenv(dir, ".venv").or_else(|| read_pyvenv(dir, "venv"));
     let has_venv = venv_version.is_some()
-        || scan::has_file(&dir.join(".venv"), "pyvenv.cfg")
-        || scan::has_file(&dir.join("venv"), "pyvenv.cfg");
-    let dot_version = scan::read_first_line(&dir.join(".python-version"))
+        || dir.has_subfile(".venv", "pyvenv.cfg")
+        || dir.has_subfile("venv", "pyvenv.cfg");
+    let dot_version = dir
+        .read_first_line(".python-version")
         .and_then(|raw| scan::clean_version(&raw));
     let manager = detect_manager(dir);
 
@@ -30,7 +30,7 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
     let short_version = full_version.as_deref().map(scan::short_major_minor);
 
     let value = match (short_version.as_deref(), manager) {
-        (Some(ver), Some(mgr)) => Some(format!("{ver} · {mgr}")),
+        (Some(ver), Some(mgr)) => Some(format!("{ver} ({mgr})")),
         (Some(ver), None) if has_venv => Some(format!("{ver} (.venv)")),
         (Some(ver), None) => Some(ver.to_owned()),
         (None, Some(mgr)) => Some(mgr.to_owned()),
@@ -50,15 +50,15 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
     let detail = format!("Python: {}", details.join(" · "));
 
     Some(CapabilityItem::new(
-        CapabilityKind::Python,
+        CapabilityKind::Languages,
         "py",
         value,
         detail,
     ))
 }
 
-fn read_pyvenv(dir: &Path, folder: &str) -> Option<String> {
-    let cfg = scan::read_bounded(&dir.join(folder).join("pyvenv.cfg"))?;
+fn read_pyvenv(dir: &DirSnapshot, folder: &str) -> Option<String> {
+    let cfg = dir.read_bounded(&format!("{folder}/pyvenv.cfg"))?;
     for line in cfg.lines() {
         let Some((key, val)) = line.split_once('=') else {
             continue;
@@ -73,18 +73,18 @@ fn read_pyvenv(dir: &Path, folder: &str) -> Option<String> {
     None
 }
 
-fn detect_manager(dir: &Path) -> Option<&'static str> {
-    if scan::has_file(dir, "uv.lock") {
+fn detect_manager(dir: &DirSnapshot) -> Option<&'static str> {
+    if dir.has_file("uv.lock") {
         Some("uv")
-    } else if scan::has_file(dir, "poetry.lock") {
+    } else if dir.has_file("poetry.lock") {
         Some("poetry")
-    } else if scan::has_file(dir, "Pipfile.lock") || scan::has_file(dir, "Pipfile") {
+    } else if dir.has_file("Pipfile.lock") || dir.has_file("Pipfile") {
         Some("pipenv")
-    } else if scan::has_file(dir, "environment.yml") || scan::has_file(dir, "conda-lock.yml") {
+    } else if dir.has_file("environment.yml") || dir.has_file("conda-lock.yml") {
         Some("conda")
-    } else if scan::has_file(dir, "pyproject.toml") {
+    } else if dir.has_file("pyproject.toml") {
         Some("pyproject")
-    } else if scan::has_file(dir, "requirements.txt") {
+    } else if dir.has_file("requirements.txt") {
         Some("pip")
     } else {
         None

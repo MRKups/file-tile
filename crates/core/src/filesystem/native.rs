@@ -120,7 +120,7 @@ impl DirectoryReader for NativeDirectory {
             }
         }
         cancellation.check(directory)?;
-        let capabilities = crate::capabilities::detect(&resolved);
+        let capabilities = crate::capabilities::detect_resolved(directory, &resolved);
         let listing = DirectoryListing::new(resolved, ListingOrigin::Local, entries, issues)
             .with_resolved_links(links)
             .with_capabilities(capabilities);

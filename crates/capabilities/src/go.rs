@@ -1,10 +1,9 @@
 //! Go module (`go.mod`) and workspace (`go.work`) detection.
 
-use std::path::{Path, PathBuf};
-
+use crate::scan::DirSnapshot;
 use crate::{CapabilityItem, CapabilityKind, scan};
 
-pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
+pub fn detect(ancestors: &[DirSnapshot]) -> Option<CapabilityItem> {
     for dir in ancestors {
         if let Some(item) = inspect_directory(dir) {
             return Some(item);
@@ -13,9 +12,9 @@ pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
     None
 }
 
-fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
-    let go_work = scan::read_bounded(&dir.join("go.work"));
-    let go_mod = scan::read_bounded(&dir.join("go.mod"));
+fn inspect_directory(dir: &DirSnapshot) -> Option<CapabilityItem> {
+    let go_work = dir.read_bounded("go.work");
+    let go_mod = dir.read_bounded("go.mod");
 
     if go_work.is_none() && go_mod.is_none() {
         return None;
@@ -29,7 +28,7 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
     let is_work = go_work.is_some();
 
     let value = match (short_ver, is_work) {
-        (Some(ver), true) => Some(format!("{ver} · work")),
+        (Some(ver), true) => Some(format!("{ver} (work)")),
         (Some(ver), false) => Some(ver),
         (None, true) => Some("work".to_owned()),
         (None, false) => Some("mod".to_owned()),
@@ -42,7 +41,12 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
         (None, false) => "Go: module (go.mod)".to_owned(),
     };
 
-    Some(CapabilityItem::new(CapabilityKind::Go, "go", value, detail))
+    Some(CapabilityItem::new(
+        CapabilityKind::Languages,
+        "go",
+        value,
+        detail,
+    ))
 }
 
 fn parse_go_version(text: &str) -> Option<String> {

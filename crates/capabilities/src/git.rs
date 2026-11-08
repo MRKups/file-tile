@@ -1,24 +1,25 @@
-//! Git repository, branch, detached commit, worktree, and submodule detection.
+//! Git repository, branch, detached commit, worktree, submodule, and stash detection.
 
 use std::path::{Path, PathBuf};
 
+use crate::scan::DirSnapshot;
 use crate::{CapabilityItem, CapabilityKind, scan};
 
-pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
+pub fn detect(ancestors: &[DirSnapshot]) -> Option<CapabilityItem> {
     for dir in ancestors {
-        let dot_git = dir.join(".git");
-        if scan::has_dir(dir, ".git") {
+        let dot_git = dir.path().join(".git");
+        if dir.has_dir(".git") {
             return inspect_git_dir(dir, &dot_git, None);
         }
-        if scan::has_file(dir, ".git")
-            && let Some(line) = scan::read_first_line(&dot_git)
+        if dir.has_file(".git")
+            && let Some(line) = dir.read_first_line(".git")
             && let Some(raw_target) = line.strip_prefix("gitdir:")
         {
             let target = PathBuf::from(raw_target.trim());
             let git_dir = if target.is_absolute() {
                 target
             } else {
-                dir.join(target)
+                dir.path().join(target)
             };
             let link_kind = if git_dir.to_string_lossy().contains("/worktrees/") {
                 Some("worktree")
@@ -32,21 +33,32 @@ pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
 }
 
 fn inspect_git_dir(
-    repo_root: &Path,
+    repo_root: &DirSnapshot,
     git_dir: &Path,
     link_kind: Option<&str>,
 ) -> Option<CapabilityItem> {
-    let head = scan::read_first_line(&git_dir.join("HEAD"))?;
+    let head = scan::read_first_line_path(&git_dir.join("HEAD"))?;
     let (head_short, head_detail) = parse_head(&head);
     let state = detect_operation(git_dir);
-    let has_submodules = scan::has_file(repo_root, ".gitmodules");
+    let common_dir = resolve_common_dir(git_dir);
+    let stashes = count_stashes(&common_dir);
+    let has_submodules = repo_root.has_file(".gitmodules");
 
-    let mut value = head_short;
+    let mut modifiers = Vec::new();
     if let Some(op) = state {
-        value = format!("{value} ({op})");
+        modifiers.push(op.to_owned());
     } else if let Some(kind) = link_kind {
-        value = format!("{value} ({kind})");
+        modifiers.push(kind.to_owned());
     }
+    if stashes > 0 {
+        modifiers.push(stash_label(stashes));
+    }
+
+    let value = if modifiers.is_empty() {
+        head_short
+    } else {
+        format!("{head_short} ({})", modifiers.join(", "))
+    };
 
     let mut detail = format!("Git: {head_detail}");
     if let Some(op) = state {
@@ -54,6 +66,9 @@ fn inspect_git_dir(
     }
     if let Some(kind) = link_kind {
         detail = format!("{detail} · {kind}");
+    }
+    if stashes > 0 {
+        detail = format!("{detail} · {}", stash_label(stashes));
     }
     if has_submodules {
         detail = format!("{detail} · submodules");
@@ -65,6 +80,46 @@ fn inspect_git_dir(
         Some(value),
         detail,
     ))
+}
+
+fn resolve_common_dir(git_dir: &Path) -> PathBuf {
+    let Some(rel) = scan::read_first_line_path(&git_dir.join("commondir")) else {
+        return git_dir.to_path_buf();
+    };
+    let target = PathBuf::from(rel);
+    if target.is_absolute() {
+        target
+    } else {
+        git_dir.join(target)
+    }
+}
+
+fn count_stashes(common_dir: &Path) -> usize {
+    if let Some(log) = scan::read_bounded_path(&common_dir.join("logs/refs/stash")) {
+        let count = log.lines().filter(|line| !line.trim().is_empty()).count();
+        if count > 0 {
+            return count;
+        }
+    }
+    if scan::has_file_on_disk(common_dir, "refs/stash") {
+        return 1;
+    }
+    if let Some(packed) = scan::read_bounded_path(&common_dir.join("packed-refs"))
+        && packed
+            .lines()
+            .any(|line| !line.starts_with('#') && line.trim_end().ends_with(" refs/stash"))
+    {
+        return 1;
+    }
+    0
+}
+
+fn stash_label(count: usize) -> String {
+    if count == 1 {
+        "1 stash".to_owned()
+    } else {
+        format!("{count} stashes")
+    }
 }
 
 fn parse_head(head: &str) -> (String, String) {
@@ -86,15 +141,17 @@ fn parse_head(head: &str) -> (String, String) {
 }
 
 fn detect_operation(git_dir: &Path) -> Option<&'static str> {
-    if scan::has_dir(git_dir, "rebase-merge") || scan::has_dir(git_dir, "rebase-apply") {
+    if scan::has_dir_on_disk(git_dir, "rebase-merge")
+        || scan::has_dir_on_disk(git_dir, "rebase-apply")
+    {
         Some("rebase")
-    } else if scan::has_file(git_dir, "MERGE_HEAD") {
+    } else if scan::has_file_on_disk(git_dir, "MERGE_HEAD") {
         Some("merge")
-    } else if scan::has_file(git_dir, "CHERRY_PICK_HEAD") {
+    } else if scan::has_file_on_disk(git_dir, "CHERRY_PICK_HEAD") {
         Some("cherry-pick")
-    } else if scan::has_file(git_dir, "REVERT_HEAD") {
+    } else if scan::has_file_on_disk(git_dir, "REVERT_HEAD") {
         Some("revert")
-    } else if scan::has_file(git_dir, "BISECT_LOG") {
+    } else if scan::has_file_on_disk(git_dir, "BISECT_LOG") {
         Some("bisect")
     } else {
         None

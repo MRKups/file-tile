@@ -90,6 +90,17 @@ struct CapabilitiesRecord {
     #[serde(default = "default_true")]
     git: bool,
     #[serde(default = "default_true")]
+    languages: bool,
+    #[serde(default = "default_true")]
+    env_files: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCapabilitiesRecord {
+    #[serde(default = "default_true")]
+    git: bool,
+    #[serde(default = "default_true")]
     python: bool,
     #[serde(default = "default_true")]
     node: bool,
@@ -105,10 +116,7 @@ impl From<crate::domain::CapabilityPreferences> for CapabilitiesRecord {
     fn from(capabilities: crate::domain::CapabilityPreferences) -> Self {
         Self {
             git: capabilities.git,
-            python: capabilities.python,
-            node: capabilities.node,
-            rust: capabilities.rust,
-            go: capabilities.go,
+            languages: capabilities.languages,
             env_files: capabilities.env_files,
         }
     }
@@ -249,15 +257,21 @@ fn restore_capabilities(
     let Some(value) = value else {
         return crate::domain::CapabilityPreferences::default();
     };
-    serde_json::from_value::<CapabilitiesRecord>(value)
+    serde_json::from_value::<CapabilitiesRecord>(value.clone())
         .ok()
         .map(|record| crate::domain::CapabilityPreferences {
             git: record.git,
-            python: record.python,
-            node: record.node,
-            rust: record.rust,
-            go: record.go,
+            languages: record.languages,
             env_files: record.env_files,
+        })
+        .or_else(|| {
+            serde_json::from_value::<LegacyCapabilitiesRecord>(value)
+                .ok()
+                .map(|record| crate::domain::CapabilityPreferences {
+                    git: record.git,
+                    languages: record.python || record.node || record.rust || record.go,
+                    env_files: record.env_files,
+                })
         })
         .unwrap_or_else(|| {
             issue(

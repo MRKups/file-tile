@@ -118,18 +118,12 @@
       "type": "object",
       "properties": {
         "git": { "type": "boolean" },
-        "python": { "type": "boolean" },
-        "node": { "type": "boolean" },
-        "rust": { "type": "boolean" },
-        "go": { "type": "boolean" },
+        "languages": { "type": "boolean" },
         "env_files": { "type": "boolean" }
       },
       "required": [
         "git",
-        "python",
-        "node",
-        "rust",
-        "go",
+        "languages",
         "env_files"
       ],
       "additionalProperties": false

@@ -8,5 +8,5 @@
   "typography": { "typeface": "system_default", "size": 14, "weight": "medium" },
   "appearance": { "light_theme": "liquid_light", "dark_theme": "liquid_dark", "transparency": 50, "box_transparency": 20, "surface_texture": "off" },
   "safety": { "desktop_access": true, "documents_access": true, "downloads_access": true, "full_disk_access": false, "system_folders": false, "applications": false, "credentials": false },
-  "capabilities": { "git": true, "python": true, "node": true, "rust": true, "go": true, "env_files": true }
+  "capabilities": { "git": true, "languages": true, "env_files": true }
 }

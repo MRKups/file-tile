@@ -1,60 +1,63 @@
 //! Modular, read-only folder capability detectors.
 //!
-//! Each capability lives in its own isolated module, inspects small marker files
-//! without spawning subprocesses, and emits compact tokens for the folder box
-//! footer along with human-readable details for hover tooltips.
+//! Each capability lives in its own isolated module, inspects in-memory directory
+//! snapshots and small marker files without spawning subprocesses, and emits
+//! compact tokens for the folder box footer along with hover tooltip details.
 
+pub mod cpp;
+pub mod dart;
+pub mod dotnet;
+pub mod elixir;
 pub mod env;
+pub mod folder;
 pub mod git;
 pub mod go;
+pub mod jvm;
 pub mod node;
+pub mod php;
 pub mod python;
+pub mod ruby;
 pub mod rust;
 pub mod scan;
+pub mod swift;
+pub mod terraform;
+pub mod toolchains;
+pub mod zig;
 
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CapabilityKind {
     Git,
-    Python,
-    Node,
-    Rust,
-    Go,
+    Languages,
     EnvFiles,
 }
 
 impl CapabilityKind {
-    pub const ALL: [Self; 6] = [
-        Self::Git,
-        Self::Python,
-        Self::Node,
-        Self::Rust,
-        Self::Go,
-        Self::EnvFiles,
-    ];
+    pub const ALL: [Self; 3] = [Self::Git, Self::Languages, Self::EnvFiles];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Git => "Git",
-            Self::Python => "Python",
-            Self::Node => "Node.js & JavaScript",
-            Self::Rust => "Rust",
-            Self::Go => "Go",
-            Self::EnvFiles => "Environment Files (.env)",
+            Self::Languages => "Languages and toolchains",
+            Self::EnvFiles => "Environment and secrets",
         }
     }
 
     pub const fn description(self) -> &'static str {
         match self {
-            Self::Git => "Show active Git branch, detached commit, worktree, or submodule state.",
-            Self::Python => "Detect virtual environments (.venv), Python versions, uv, and Poetry.",
-            Self::Node => {
-                "Detect Node versions (.nvmrc, .node-version) and npm, pnpm, Bun, or Yarn."
-            }
-            Self::Rust => "Detect Cargo packages, workspaces, Rust editions, and toolchains.",
-            Self::Go => "Detect Go modules (go.mod) and multi-module workspaces (go.work).",
-            Self::EnvFiles => "Highlight when .env or .envrc override files exist in the folder.",
+            Self::Git => "Branch, commit, worktree, submodule, and stash count.",
+            Self::Languages => "Runtimes, versions, and package managers.",
+            Self::EnvFiles => ".env, .envrc, auth dotfiles, and key files.",
+        }
+    }
+
+    pub const fn tooltip(self) -> Option<&'static str> {
+        match self {
+            Self::Git | Self::EnvFiles => None,
+            Self::Languages => Some(
+                "Supported: Python, Node.js, Deno, Rust, Go, Ruby, Java/JVM, C/C++, Swift, .NET, PHP, Zig, Elixir, Dart/Flutter, Terraform/OpenTofu, Nix, mise, and asdf.",
+            ),
         }
     }
 }
@@ -62,10 +65,7 @@ impl CapabilityKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilityPreferences {
     pub git: bool,
-    pub python: bool,
-    pub node: bool,
-    pub rust: bool,
-    pub go: bool,
+    pub languages: bool,
     pub env_files: bool,
 }
 
@@ -73,10 +73,7 @@ impl Default for CapabilityPreferences {
     fn default() -> Self {
         Self {
             git: true,
-            python: true,
-            node: true,
-            rust: true,
-            go: true,
+            languages: true,
             env_files: true,
         }
     }
@@ -86,10 +83,7 @@ impl CapabilityPreferences {
     pub const fn enabled(self, kind: CapabilityKind) -> bool {
         match kind {
             CapabilityKind::Git => self.git,
-            CapabilityKind::Python => self.python,
-            CapabilityKind::Node => self.node,
-            CapabilityKind::Rust => self.rust,
-            CapabilityKind::Go => self.go,
+            CapabilityKind::Languages => self.languages,
             CapabilityKind::EnvFiles => self.env_files,
         }
     }
@@ -97,10 +91,7 @@ impl CapabilityPreferences {
     pub const fn with_enabled(mut self, kind: CapabilityKind, enabled: bool) -> Self {
         match kind {
             CapabilityKind::Git => self.git = enabled,
-            CapabilityKind::Python => self.python = enabled,
-            CapabilityKind::Node => self.node = enabled,
-            CapabilityKind::Rust => self.rust = enabled,
-            CapabilityKind::Go => self.go = enabled,
+            CapabilityKind::Languages => self.languages = enabled,
             CapabilityKind::EnvFiles => self.env_files = enabled,
         }
         self
@@ -109,7 +100,7 @@ impl CapabilityPreferences {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityItem {
-    pub kind: CapabilityKind,
+    pub kind: Option<CapabilityKind>,
     pub prefix: String,
     pub value: Option<String>,
     pub detail: String,
@@ -123,7 +114,20 @@ impl CapabilityItem {
         detail: impl Into<String>,
     ) -> Self {
         Self {
-            kind,
+            kind: Some(kind),
+            prefix: prefix.into(),
+            value,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn always(
+        prefix: impl Into<String>,
+        value: Option<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: None,
             prefix: prefix.into(),
             value,
             detail: detail.into(),
@@ -155,31 +159,48 @@ impl FolderCapabilities {
     ) -> impl Iterator<Item = &CapabilityItem> {
         self.items
             .iter()
-            .filter(move |item| preferences.enabled(item.kind))
+            .filter(move |item| item.kind.is_none_or(|kind| preferences.enabled(kind)))
     }
 }
 
 /// Inspect `directory` and its bounded ancestors across all capability modules.
 pub fn detect(directory: &Path) -> FolderCapabilities {
-    let ancestors = scan::ancestors(directory);
-    let mut items = Vec::new();
-    if let Some(item) = git::detect(&ancestors) {
-        items.push(item);
+    detect_resolved(directory, directory)
+}
+
+type Detector = fn(&[scan::DirSnapshot]) -> Option<CapabilityItem>;
+
+const DETECTORS: [Detector; 16] = [
+    git::detect,
+    python::detect,
+    node::detect,
+    rust::detect,
+    go::detect,
+    ruby::detect,
+    jvm::detect,
+    cpp::detect,
+    swift::detect,
+    dotnet::detect,
+    php::detect,
+    zig::detect,
+    elixir::detect,
+    dart::detect,
+    terraform::detect,
+    toolchains::detect,
+];
+
+/// Inspect `directory` (the requested path) and `resolved` (its canonical target)
+/// along with bounded ancestors across all capability modules.
+pub fn detect_resolved(directory: &Path, resolved: &Path) -> FolderCapabilities {
+    let ancestors = scan::ancestors(resolved);
+    let mut items = folder::detect(directory, resolved);
+    for detector in DETECTORS {
+        if let Some(item) = detector(&ancestors) {
+            items.push(item);
+        }
     }
-    if let Some(item) = python::detect(&ancestors) {
-        items.push(item);
-    }
-    if let Some(item) = node::detect(&ancestors) {
-        items.push(item);
-    }
-    if let Some(item) = rust::detect(&ancestors) {
-        items.push(item);
-    }
-    if let Some(item) = go::detect(&ancestors) {
-        items.push(item);
-    }
-    if let Some(item) = env::detect(directory) {
-        items.push(item);
+    if let Some(current) = ancestors.first() {
+        items.extend(env::detect(current));
     }
     FolderCapabilities::new(items)
 }

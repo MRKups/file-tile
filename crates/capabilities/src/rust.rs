@@ -1,10 +1,9 @@
 //! Rust / Cargo package, workspace, edition, and toolchain detection.
 
-use std::path::{Path, PathBuf};
-
+use crate::scan::DirSnapshot;
 use crate::{CapabilityItem, CapabilityKind, scan};
 
-pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
+pub fn detect(ancestors: &[DirSnapshot]) -> Option<CapabilityItem> {
     for dir in ancestors {
         if let Some(item) = inspect_directory(dir) {
             return Some(item);
@@ -13,8 +12,8 @@ pub fn detect(ancestors: &[PathBuf]) -> Option<CapabilityItem> {
     None
 }
 
-fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
-    let cargo_toml = scan::read_bounded(&dir.join("Cargo.toml"));
+fn inspect_directory(dir: &DirSnapshot) -> Option<CapabilityItem> {
+    let cargo_toml = dir.read_bounded("Cargo.toml");
     let toolchain = read_toolchain(dir);
 
     if cargo_toml.is_none() && toolchain.is_none() {
@@ -27,7 +26,7 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
         .is_some_and(|text| text.lines().any(|line| line.trim() == "[workspace]"));
 
     let value = match (edition.as_deref(), toolchain.as_deref()) {
-        (Some(ed), Some(tc)) => Some(format!("{ed} · {tc}")),
+        (Some(ed), Some(tc)) => Some(format!("{ed} ({tc})")),
         (Some(ed), None) => Some(ed.to_owned()),
         (None, Some(tc)) => Some(tc.to_owned()),
         (None, None) if is_workspace => Some("workspace".to_owned()),
@@ -48,7 +47,7 @@ fn inspect_directory(dir: &Path) -> Option<CapabilityItem> {
     }
 
     Some(CapabilityItem::new(
-        CapabilityKind::Rust,
+        CapabilityKind::Languages,
         "rust",
         value,
         format!("Rust: {}", details.join(" · ")),
@@ -70,8 +69,8 @@ fn parse_edition(cargo_toml: &str) -> Option<String> {
     None
 }
 
-fn read_toolchain(dir: &Path) -> Option<String> {
-    if let Some(text) = scan::read_bounded(&dir.join("rust-toolchain.toml")) {
+fn read_toolchain(dir: &DirSnapshot) -> Option<String> {
+    if let Some(text) = dir.read_bounded("rust-toolchain.toml") {
         for line in text.lines() {
             let Some((key, val)) = line.trim().split_once('=') else {
                 continue;
@@ -84,7 +83,7 @@ fn read_toolchain(dir: &Path) -> Option<String> {
             }
         }
     }
-    scan::read_first_line(&dir.join("rust-toolchain")).and_then(|line| {
+    dir.read_first_line("rust-toolchain").and_then(|line| {
         let cleaned = line.trim();
         (!cleaned.is_empty() && cleaned.len() <= 20).then(|| cleaned.to_owned())
     })
