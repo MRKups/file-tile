@@ -42,7 +42,7 @@ pub(super) fn decode_header(
         .remove("schema_version")
         .and_then(|value| value.as_u64())
         .ok_or(ConfigError::InvalidHeader)?;
-    if version != u64::from(SCHEMA_VERSION) {
+    if version == 0 || version > u64::from(SCHEMA_VERSION) {
         return Err(ConfigError::UnsupportedVersion(version));
     }
     let kind = fields.remove("kind").ok_or(ConfigError::InvalidHeader)?;
@@ -53,7 +53,7 @@ pub(super) fn decode_header(
             ConfigError::InvalidHeader
         });
     }
-    Ok(Value::Object(fields))
+    super::migrations::upgrade(version, expected_kind, Value::Object(fields))
 }
 
 pub(super) fn decode(bytes: &[u8], key: ConfigKey) -> Result<Decoded, ConfigError> {
@@ -80,35 +80,11 @@ struct PreferencesRecord {
     capabilities: Option<Value>,
 }
 
-const fn default_true() -> bool {
-    true
-}
-
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CapabilitiesRecord {
-    #[serde(default = "default_true")]
     git: bool,
-    #[serde(default = "default_true")]
     languages: bool,
-    #[serde(default = "default_true")]
-    env_files: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyCapabilitiesRecord {
-    #[serde(default = "default_true")]
-    git: bool,
-    #[serde(default = "default_true")]
-    python: bool,
-    #[serde(default = "default_true")]
-    node: bool,
-    #[serde(default = "default_true")]
-    rust: bool,
-    #[serde(default = "default_true")]
-    go: bool,
-    #[serde(default = "default_true")]
     env_files: bool,
 }
 
@@ -125,13 +101,9 @@ impl From<crate::domain::CapabilityPreferences> for CapabilitiesRecord {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SafetyRecord {
-    #[serde(default = "default_true")]
     desktop_access: bool,
-    #[serde(default = "default_true")]
     documents_access: bool,
-    #[serde(default = "default_true")]
     downloads_access: bool,
-    #[serde(default)]
     full_disk_access: bool,
     system_folders: bool,
     applications: bool,
@@ -237,8 +209,10 @@ fn preferences(
         );
         crate::application::preferences::typography::TypographyPreferences::default()
     });
-    let safety = restore_safety(record.safety, issues);
-    let capabilities = restore_capabilities(record.capabilities, issues);
+    let (safety, _safety_healed) =
+        super::healing::preferences_fields::restore_safety(record.safety);
+    let (capabilities, _capabilities_healed) =
+        super::healing::preferences_fields::restore_capabilities(record.capabilities);
     Ok(ConfigurationDocument::Preferences(AppPreferences {
         last_workspace_id,
         window,
@@ -248,77 +222,6 @@ fn preferences(
         safety,
         capabilities,
     }))
-}
-
-fn restore_capabilities(
-    value: Option<Value>,
-    issues: &mut Vec<RecoveryIssue>,
-) -> crate::domain::CapabilityPreferences {
-    let Some(value) = value else {
-        return crate::domain::CapabilityPreferences::default();
-    };
-    serde_json::from_value::<CapabilitiesRecord>(value.clone())
-        .ok()
-        .map(|record| crate::domain::CapabilityPreferences {
-            git: record.git,
-            languages: record.languages,
-            env_files: record.env_files,
-        })
-        .or_else(|| {
-            serde_json::from_value::<LegacyCapabilitiesRecord>(value)
-                .ok()
-                .map(|record| crate::domain::CapabilityPreferences {
-                    git: record.git,
-                    languages: record.python || record.node || record.rust || record.go,
-                    env_files: record.env_files,
-                })
-        })
-        .unwrap_or_else(|| {
-            issue(
-                issues,
-                0,
-                "invalid capability preferences; using default capabilities for viewing only",
-            );
-            crate::domain::CapabilityPreferences::default()
-        })
-}
-
-fn restore_safety(
-    value: Value,
-    issues: &mut Vec<RecoveryIssue>,
-) -> crate::domain::SafetyPreferences {
-    let legacy = value.get("desktop_access").is_none();
-    serde_json::from_value::<SafetyRecord>(value)
-        .ok()
-        .map(|record| crate::domain::SafetyPreferences {
-            desktop_access: record.desktop_access,
-            documents_access: record.documents_access,
-            downloads_access: record.downloads_access,
-            full_disk_access: record.full_disk_access,
-            system_folders: if legacy {
-                !record.system_folders
-            } else {
-                record.system_folders
-            },
-            applications: if legacy {
-                !record.applications
-            } else {
-                record.applications
-            },
-            credentials: if legacy {
-                !record.credentials
-            } else {
-                record.credentials
-            },
-        })
-        .unwrap_or_else(|| {
-            issue(
-                issues,
-                0,
-                "invalid safety preferences; using default protections for viewing only",
-            );
-            crate::domain::SafetyPreferences::default()
-        })
 }
 
 #[derive(Deserialize)]

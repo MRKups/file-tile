@@ -124,27 +124,65 @@ impl Store {
         })?;
         if fresh {
             self.initialize()?;
+        } else {
+            let _ = super::healing::orphaned_temps::sweep_if_initialized(&self.config);
         }
         let preferences = self.read(ConfigKey::Preferences)?;
         let index = self.read(ConfigKey::WorkspaceIndex)?;
         let mut recovery_issues = notices(preferences.issues, ConfigKey::Preferences);
         recovery_issues.extend(notices(index.issues, ConfigKey::WorkspaceIndex));
-        let ConfigurationDocument::Preferences(preferences) = preferences.document else {
+        let ConfigurationDocument::Preferences(mut preferences) = preferences.document else {
             return Err(invalid("Expected preferences."));
         };
         let ConfigurationDocument::WorkspaceIndex(index) = index.document else {
             return Err(invalid("Expected a workspace index."));
         };
-        let id = preferences
+        let mut id = preferences
             .last_workspace_id
             .ok_or_else(|| invalid("The last-active workspace reference is missing."))?;
         if !index.workspaces.iter().any(|item| item.id == id) {
             return Err(invalid("The last-active workspace is not in the index."));
         }
-        let active = self.read(ConfigKey::Workspace(id))?;
-        recovery_issues.extend(notices(active.issues, ConfigKey::Workspace(id)));
-        let ConfigurationDocument::Workspace(active) = active.document else {
-            return Err(invalid("Expected a workspace."));
+        let mut healed_notice = None;
+        let active = match self.read(ConfigKey::Workspace(id)) {
+            Ok(decoded) => {
+                recovery_issues.extend(notices(decoded.issues, ConfigKey::Workspace(id)));
+                let ConfigurationDocument::Workspace(active) = decoded.document else {
+                    return Err(invalid("Expected a workspace."));
+                };
+                active
+            }
+            Err(StorageFailure::Io(std::io::ErrorKind::NotFound)) if recovery_issues.is_empty() => {
+                let Some(healed) =
+                    super::healing::workspace_fallback::heal_missing_active_workspace(
+                        &self.config,
+                        id,
+                        &index,
+                    )?
+                else {
+                    return Err(StorageFailure::Io(std::io::ErrorKind::NotFound));
+                };
+                match healed.scenario {
+                    super::healing::ConfigHealingScenario::MissingActiveWorkspaceFallback => {
+                        id = healed.id;
+                        preferences.last_workspace_id = Some(id);
+                        let pref_bytes =
+                            encode(&ConfigurationDocument::Preferences(preferences.clone()))
+                                .map_err(|error| invalid(error.reason()))?;
+                        self.publish_loaded(ConfigKey::Preferences, pref_bytes)?;
+                        self.baselines
+                            .push((ConfigKey::Workspace(id), healed.bytes));
+                    }
+                    _ => {
+                        self.publish(ConfigKey::Workspace(id), &healed.bytes, None)?;
+                        self.baselines
+                            .push((ConfigKey::Workspace(id), healed.bytes));
+                    }
+                }
+                healed_notice = Some(healed.notice);
+                healed.document
+            }
+            Err(error) => return Err(error),
         };
         self.active = Some((session, id));
         self.writable = recovery_issues.is_empty();
@@ -161,7 +199,7 @@ impl Store {
             user_themes_notice,
             recovery_issues,
             backup: None,
-            notice: None,
+            notice: healed_notice,
         })
     }
 

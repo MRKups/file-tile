@@ -3,7 +3,9 @@
 mod appearance;
 mod codec;
 mod files;
+pub mod healing;
 mod launchers;
+mod migrations;
 mod path;
 mod recovery;
 mod scope;

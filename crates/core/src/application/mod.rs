@@ -2,6 +2,7 @@
 
 pub mod contracts;
 pub mod files;
+pub mod healing;
 pub mod preferences;
 #[cfg(test)]
 mod tests;
@@ -830,6 +831,10 @@ impl Application {
                     let effects = self.cancel_folder_configuration();
                     self.box_configuration_error = Some((view, error.describe("configure folder")));
                     effects
+                } else if let Some((_scenario, effect)) =
+                    self.try_heal_directory_error(view, intent, &error)
+                {
+                    vec![effect]
                 } else {
                     self.fail(view, error.to_string());
                     Vec::new()
