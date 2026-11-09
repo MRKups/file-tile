@@ -98,6 +98,11 @@ impl Navigation {
         self.scope = scope;
         self
     }
+    pub(crate) fn set_default_start(&mut self, start: PathBuf) {
+        if self.scope.kind() == super::ScopeKind::Free {
+            self.start = start;
+        }
+    }
     pub fn set_scope(&mut self, scope: super::Scope) {
         if matches!(
             scope.kind(),

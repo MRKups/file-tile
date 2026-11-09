@@ -74,6 +74,22 @@ impl Workspace {
         path: PathBuf,
         intent: NavigationIntent,
     ) -> bool {
+        if intent == NavigationIntent::Configure
+            && let Some(box_index) = self
+                .boxes
+                .iter()
+                .position(|item| item.has_visible_tabs() && item.view(view).is_some())
+        {
+            let before = self.boxes[box_index].clone();
+            let mut updated = before.clone();
+            updated.configure_default_folder(path);
+            if updated == before {
+                return false;
+            }
+            self.remember();
+            self.boxes[box_index] = updated;
+            return true;
+        }
         let Some(item) = self.view(view) else {
             return false;
         };

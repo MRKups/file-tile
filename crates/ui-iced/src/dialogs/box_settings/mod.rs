@@ -10,6 +10,13 @@ use crate::{Desktop, Message, boxes::file_list, boxes::navigation_header};
 pub(crate) fn folder_id(view: ViewId) -> String {
     format!("box-settings-folder-{}", view.0)
 }
+pub(super) fn configured_folder_path(item: &crate::domain::FolderBox) -> &std::path::Path {
+    if item.has_visible_tabs() {
+        item.default_folder()
+    } else {
+        item.active_view().navigation.current()
+    }
+}
 pub(crate) const CARD_ID: &str = "box-settings-card";
 pub(crate) const FIELDS_ID: &str = "box-settings-fields";
 pub(crate) const HANDLE_ID: &str = "box-settings-handle";
@@ -108,6 +115,30 @@ impl Draft {
 
     pub(crate) fn clear_picker(&mut self) {
         self.picker = None;
+    }
+
+    fn for_box(item: &crate::domain::FolderBox, home: &std::path::Path, position: Point) -> Self {
+        let mut range = crate::dialogs::range_editor::Draft::new();
+        range.sync(item.active_view().navigation.scope().range(), false, false);
+        Self {
+            range_page: false,
+            form_restore: false,
+            form_offset: 0.0,
+            picker: None,
+            picker_error: None,
+            range,
+            tree_offset: 0.0,
+            scope_kind: item.active_view().navigation.scope().kind(),
+            id: item.id,
+            view: item.active_view().view,
+            folder: navigation_header::display_path(configured_folder_path(item), home),
+            edited: false,
+            revision: 0,
+            submitted: None,
+            focused: false,
+            position,
+            drag: None,
+        }
     }
 }
 
@@ -257,7 +288,7 @@ impl Desktop {
                 }
                 if !draft.edited {
                     draft.folder = navigation_header::display_path(
-                        item.active_view().navigation.current(),
+                        configured_folder_path(item),
                         self.application.home(),
                     );
                 }
@@ -274,35 +305,17 @@ impl Desktop {
             y: rect.y + geometry.viewport.y - geometry.offset.y,
             ..rect
         };
-        self.box_settings = Some(Draft {
-            range_page: false,
-            form_restore: false,
-            form_offset: 0.0,
-            picker: None,
-            picker_error: None,
-            range: crate::dialogs::range_editor::Draft::new(),
-            tree_offset: 0.0,
-            scope_kind: item.active_view().navigation.scope().kind(),
-            id: item.id,
-            view: item.active_view().view,
-            folder: navigation_header::display_path(
-                item.active_view().navigation.current(),
-                self.application.home(),
-            ),
-            edited: false,
-            revision: 0,
-            submitted: None,
-            focused: false,
-            position: initial_position(self.size, geometry.header_height, target),
-            drag: None,
-        });
+        let position = self
+            .box_settings
+            .as_ref()
+            .filter(|draft| draft.id == item.id)
+            .map_or_else(
+                || initial_position(self.size, geometry.header_height, target),
+                |draft| draft.position,
+            );
+        self.box_settings = Some(Draft::for_box(item, self.application.home(), position));
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
-        if let Some(draft) = &mut self.box_settings {
-            draft
-                .range
-                .sync(item.active_view().navigation.scope().range(), false, false);
-        }
     }
 
     pub(crate) fn box_settings_message(&mut self, message: Message) -> Task<Message> {
@@ -420,9 +433,9 @@ impl Desktop {
             && draft.submitted == Some((generation, draft.revision))
         {
             draft.submitted = None;
-            if succeeded && let Some(item) = self.application.workspace().view(view) {
+            if succeeded && let Some(box_item) = self.application.workspace().box_for_view(view) {
                 draft.folder = navigation_header::display_path(
-                    item.navigation.current(),
+                    configured_folder_path(box_item),
                     self.application.home(),
                 );
                 draft.edited = false;

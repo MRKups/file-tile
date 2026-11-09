@@ -780,52 +780,7 @@ impl Application {
             return Vec::new();
         }
         match completion.result {
-            Ok(listing) => {
-                if let Err(reason) = self
-                    .safety_policy(Some(view))
-                    .check_read_directory(&listing.directory)
-                {
-                    if intent == NavigationIntent::Configure {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, reason.to_owned()));
-                        return effects;
-                    }
-                    self.fail(view, reason.to_owned());
-                    return Vec::new();
-                }
-                if !self.read_scope(view).allows(&listing.directory) {
-                    if intent == NavigationIntent::Configure {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, "Cannot configure folder outside this Range. Edit its boundaries first.".into()));
-                        return effects;
-                    }
-                    self.fail(view, "Cannot enter folder outside this navigation scope. Choose an allowed folder or edit the scope.".into());
-                    return Vec::new();
-                }
-                if intent == NavigationIntent::Configure {
-                    if configuration::validate_saved_path(&listing.directory).is_err() {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, "Cannot configure folder: resolved path exceeds the saved-path limit. Choose a shorter folder path.".into()));
-                        return effects;
-                    }
-                    self.pending_configuration = None;
-                    self.box_configuration_error = None;
-                }
-                let changed =
-                    self.commit_listed_navigation(view, listing.directory.clone(), intent);
-                let usage_path = (usage_demand
-                    && listing.origin == directory::ListingOrigin::Local)
-                    .then(|| listing.directory.clone());
-                self.loads.insert(view, LoadState::Ready(Arc::new(listing)));
-                if let Some(path) = usage_path {
-                    self.demand_folder_usage(path, std::time::Instant::now());
-                }
-                if changed {
-                    self.save_effect(true)
-                } else {
-                    Vec::new()
-                }
-            }
+            Ok(listing) => self.complete_listing_success(view, intent, usage_demand, listing),
             Err(error) => {
                 if intent == NavigationIntent::Configure {
                     let effects = self.cancel_folder_configuration();
@@ -841,5 +796,77 @@ impl Application {
                 }
             }
         }
+    }
+
+    fn complete_listing_success(
+        &mut self,
+        view: ViewId,
+        intent: NavigationIntent,
+        usage_demand: bool,
+        listing: DirectoryListing,
+    ) -> Vec<Effect> {
+        if let Err(reason) = self
+            .safety_policy(Some(view))
+            .check_read_directory(&listing.directory)
+        {
+            if intent == NavigationIntent::Configure {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((view, reason.to_owned()));
+                return effects;
+            }
+            self.fail(view, reason.to_owned());
+            return Vec::new();
+        }
+        if !self.read_scope(view).allows(&listing.directory) {
+            if intent == NavigationIntent::Configure {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((
+                    view,
+                    "Cannot configure folder outside this Range. Edit its boundaries first.".into(),
+                ));
+                return effects;
+            }
+            self.fail(
+                view,
+                "Cannot enter folder outside this navigation scope. Choose an allowed folder or edit the scope."
+                    .into(),
+            );
+            return Vec::new();
+        }
+        let mut restore_effects = Vec::new();
+        if intent == NavigationIntent::Configure {
+            if configuration::validate_saved_path(&listing.directory).is_err() {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((
+                    view,
+                    "Cannot configure folder: resolved path exceeds the saved-path limit. Choose a shorter folder path."
+                        .into(),
+                ));
+                return effects;
+            }
+            self.box_configuration_error = None;
+        }
+        let changed = self.commit_listed_navigation(view, listing.directory.clone(), intent);
+        let active_view_matches = self
+            .workspace
+            .view(view)
+            .is_some_and(|item| item.navigation.current() == listing.directory);
+        if intent == NavigationIntent::Configure && !active_view_matches {
+            restore_effects = self.cancel_folder_configuration();
+        } else {
+            if intent == NavigationIntent::Configure {
+                self.pending_configuration = None;
+            }
+            let usage_path = (usage_demand && listing.origin == directory::ListingOrigin::Local)
+                .then(|| listing.directory.clone());
+            self.loads.insert(view, LoadState::Ready(Arc::new(listing)));
+            if let Some(path) = usage_path {
+                self.demand_folder_usage(path, std::time::Instant::now());
+            }
+        }
+        if changed {
+            restore_effects.extend(self.save_effect(true));
+        }
+        restore_effects
     }
 }

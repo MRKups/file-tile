@@ -69,10 +69,15 @@ impl Application {
             Action::ConfigureFolder(view, input) => self.configure_folder(view, input),
             Action::ConfigurePath(view, path) => self.request_configured_folder(view, Ok(path)),
             Action::ConfigureCurrentFolder(view) => {
-                let target = self
-                    .workspace
-                    .view(view)
-                    .map(|item| item.navigation.current().to_path_buf());
+                let target = self.workspace.box_for_view(view).and_then(|box_item| {
+                    if box_item.has_visible_tabs() {
+                        Some(box_item.default_folder().to_path_buf())
+                    } else {
+                        self.workspace
+                            .view(view)
+                            .map(|item| item.navigation.current().to_path_buf())
+                    }
+                });
                 target.map_or_else(Vec::new, |path| {
                     self.request_configured_folder(view, Ok(path))
                 })
@@ -102,14 +107,21 @@ impl Application {
         view: ViewId,
         input: String,
     ) -> Vec<Effect> {
-        let Some(item) = self.workspace.view(view) else {
+        let Some(box_item) = self.workspace.box_for_view(view) else {
             return Vec::new();
         };
-        if !self.workspace.configuring(item.id) {
+        if !self.workspace.configuring(box_item.id) {
             return Vec::new();
         }
-        let target = expand_path(&input, item.navigation.current(), &self.home)
-            .map_err(|error| error.to_string());
+        let base = if box_item.has_visible_tabs() {
+            box_item.default_folder()
+        } else {
+            let Some(item) = self.workspace.view(view) else {
+                return Vec::new();
+            };
+            item.navigation.current()
+        };
+        let target = expand_path(&input, base, &self.home).map_err(|error| error.to_string());
         self.request_configured_folder(view, target)
     }
 

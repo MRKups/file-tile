@@ -43,7 +43,10 @@ impl Desktop {
             )
             .chain(operation::focus(range_editor::CANCEL_ID));
         }
-        let directory = item.navigation.current().to_path_buf();
+        let directory = self.application.workspace().box_for_view(view).map_or_else(
+            || item.navigation.current().to_path_buf(),
+            |box_item| super::configured_folder_path(box_item).to_path_buf(),
+        );
         let Some((generation, task)) = self
             .settings_picker
             .start(directory, Message::BoxFolderChosen)
@@ -142,13 +145,14 @@ pub(super) fn folder_editor<'a>(
         .on_input_maybe((!busy).then_some(move |text| Message::BoxFolderChanged(view, text)))
         .on_submit_maybe((!busy).then_some(Message::CommitBoxFolder(view)))
         .style(move |_, status| folder_field::field_style(palette, status, invalid));
-    let tab_number = tab_number(desktop, draft);
+    let has_tabs = desktop
+        .application
+        .workspace()
+        .box_for_view(view)
+        .is_some_and(crate::domain::FolderBox::has_visible_tabs);
     let mut editor = column![
-        ty.control(tab_number.map_or_else(
-            || "Folder".into(),
-            |number| format!("Folder for tab {number}")
-        ))
-        .color(palette.text),
+        ty.control(if has_tabs { "Default folder" } else { "Folder" })
+            .color(palette.text),
         folder_field::view(
             field.into(),
             CHOOSE_ID,
@@ -197,24 +201,16 @@ pub(super) fn folder_editor<'a>(
     ) {
         feedback = feedback.push(ty.caption("Checking folder…").color(palette.muted));
     }
-    if item.navigation.current().to_str().is_none() && !draft.edited {
+    let configured_path = desktop
+        .application
+        .workspace()
+        .box_for_view(view)
+        .map_or_else(|| item.navigation.current(), super::configured_folder_path);
+    if configured_path.to_str().is_none() && !draft.edited {
         feedback = feedback.push(
             ty.caption("This path cannot be represented exactly as text. Leave it unchanged to preserve it, or choose a replacement.")
                 .color(palette.muted),
         );
     }
     (editor.into(), feedback.into())
-}
-
-fn tab_number(desktop: &Desktop, draft: &Draft) -> Option<usize> {
-    desktop
-        .application
-        .workspace()
-        .boxes()
-        .iter()
-        .find(|item| item.id == draft.id)
-        .and_then(|item| item.tabs.as_ref())
-        .filter(|tabs| tabs.visible())
-        .and_then(|tabs| tabs.views().iter().position(|tab| tab.view == draft.view))
-        .map(|index| index + 1)
 }

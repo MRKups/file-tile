@@ -54,6 +54,29 @@ impl Tabs {
 }
 
 impl FolderBox {
+    pub fn has_visible_tabs(&self) -> bool {
+        self.tabs.as_ref().is_some_and(Tabs::visible)
+    }
+    pub fn default_folder(&self) -> &std::path::Path {
+        self.standalone.navigation.start()
+    }
+    pub(super) fn configure_default_folder(&mut self, path: std::path::PathBuf) {
+        let old_default = self.standalone.navigation.start().to_path_buf();
+        self.standalone.navigation = Navigation::new(path.clone());
+        if let Some(tabs) = &mut self.tabs {
+            for tab in &mut tabs.views {
+                let untouched_at_old_default = tab.navigation.current() == old_default
+                    && tab.navigation.back_history().is_empty()
+                    && tab.navigation.forward_history().is_empty()
+                    && tab.navigation.scope().kind() == crate::domain::ScopeKind::Free;
+                if untouched_at_old_default {
+                    tab.navigation = Navigation::new(path.clone());
+                } else {
+                    tab.navigation.set_default_start(path.clone());
+                }
+            }
+        }
+    }
     pub fn active_view(&self) -> &FolderView {
         match self.tabs.as_ref().filter(|tabs| tabs.visible) {
             Some(tabs) => tabs.active_view(),
@@ -99,6 +122,9 @@ pub enum TabCommand {
 }
 
 impl Workspace {
+    pub fn box_for_view(&self, view: ViewId) -> Option<&FolderBox> {
+        self.boxes.iter().find(|item| item.view(view).is_some())
+    }
     pub fn can_change_tabs(&self, id: BoxId, command: TabCommand) -> bool {
         self.boxes.iter().any(|item| item.id == id)
             && match command {

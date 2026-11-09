@@ -72,11 +72,15 @@ impl Application {
             .view(view)
             .map(|item| item.navigation.scope().clone())
             .unwrap_or_default();
+        let configuring_tabbed_box = self
+            .workspace
+            .box_for_view(view)
+            .is_some_and(crate::domain::FolderBox::has_visible_tabs);
         if self
             .pending_configuration
             .as_ref()
             .is_some_and(|pending| pending.view == view)
-            && scope.kind() != ScopeKind::Range
+            && (configuring_tabbed_box || scope.kind() != ScopeKind::Range)
         {
             Scope::default()
         } else {
