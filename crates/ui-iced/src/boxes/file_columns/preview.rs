@@ -36,6 +36,7 @@ pub(crate) enum PreviewLoad {
         generation: u64,
     },
     Loaded {
+        generation: u64,
         listing: Arc<DirectoryListing>,
         ordered: Vec<usize>,
     },
@@ -96,6 +97,7 @@ pub(crate) struct Runtime {
     views: HashMap<ViewId, ViewPreview>,
     pending: HashMap<ViewId, PendingRead>,
     pending_selection: HashMap<ViewId, (PathBuf, PathBuf)>,
+    focused_view: Option<ViewId>,
 }
 
 impl Runtime {
@@ -107,6 +109,71 @@ impl Runtime {
         self.pending.clear();
         self.views.clear();
         self.pending_selection.clear();
+        self.focused_view = None;
+    }
+
+    pub(crate) fn set_focused(&mut self, view: Option<ViewId>) {
+        self.focused_view = view;
+    }
+
+    pub(crate) fn is_focused(&self, view: ViewId) -> bool {
+        self.focused_view == Some(view)
+            && self
+                .views
+                .get(&view)
+                .is_some_and(|preview| matches!(preview.load, PreviewLoad::Loaded { .. }))
+    }
+
+    pub(crate) fn jump_candidates(
+        &self,
+        view: ViewId,
+        scope: &Scope,
+    ) -> Vec<crate::application::files::jump::JumpCandidate<'_>> {
+        let Some(preview) = self.views.get(&view) else {
+            return Vec::new();
+        };
+        let PreviewLoad::Loaded {
+            listing, ordered, ..
+        } = &preview.load
+        else {
+            return Vec::new();
+        };
+        crate::application::files::jump::listing_jump_candidates(
+            listing,
+            ordered,
+            preview.show_hidden,
+            scope,
+        )
+    }
+
+    pub(crate) fn jump_select_and_reveal(
+        &mut self,
+        view: ViewId,
+        path: PathBuf,
+        display_index: usize,
+        viewport_h: f32,
+        row_h: f32,
+    ) -> Task<Message> {
+        let Some(preview) = self.views.get_mut(&view) else {
+            return Task::none();
+        };
+        let (generation, total) = match &preview.load {
+            PreviewLoad::Loaded {
+                generation,
+                ordered,
+                ..
+            } => (*generation, ordered.len()),
+            PreviewLoad::Loading { .. } | PreviewLoad::Failed { .. } => return Task::none(),
+        };
+        preview.selected = Some(path);
+        let top = display_index as f32 * row_h;
+        let bottom = (display_index + 1) as f32 * row_h;
+        let content_h = total as f32 * row_h;
+        preview.scroll_y =
+            file_list::reveal_scroll_offset(preview.scroll_y, viewport_h, content_h, top, bottom);
+        let scroll_id = format!("column-preview-scroll-{}", view.0);
+        iced::advanced::widget::operate(file_list::RevealScroll::new(scroll_id, top, bottom))
+            .map(move |window| Message::ColumnPreviewScrolled(view, generation, window.offset))
     }
 
     pub(crate) fn clear_pending(&mut self) {
@@ -123,6 +190,9 @@ impl Runtime {
         for view in affected {
             self.pending.remove(&view);
             self.views.remove(&view);
+            if self.focused_view == Some(view) {
+                self.focused_view = None;
+            }
         }
     }
 
@@ -249,6 +319,10 @@ impl Desktop {
             }
             tasks.push(self.start_column_preview(view, target));
         }
+        self.column_previews.focused_view = self
+            .column_previews
+            .focused_view
+            .filter(|view| self.column_previews.views.contains_key(view));
         self.application.clear_column_previews();
         for (&view, preview) in &self.column_previews.views {
             if let PreviewLoad::Loaded { listing, .. } = &preview.load {
@@ -260,6 +334,9 @@ impl Desktop {
     }
 
     fn start_column_preview(&mut self, view: ViewId, target: DesiredPreview) -> Task<Message> {
+        if self.column_previews.focused_view == Some(view) {
+            self.column_previews.focused_view = None;
+        }
         self.column_previews.next_generation =
             self.column_previews.next_generation.saturating_add(1);
         let generation = self.column_previews.next_generation;
@@ -373,11 +450,18 @@ impl Desktop {
                         .is_some_and(|entry| preview.show_hidden || !entry.hidden)
                 {
                     preview.selected = Some(target);
+                    if self.active_view == Some(view) {
+                        self.column_previews.focused_view = Some(view);
+                    }
                 }
                 let listing = Arc::new(listing);
                 self.application
                     .set_column_preview(view, Some(Arc::clone(&listing)));
-                preview.load = PreviewLoad::Loaded { listing, ordered };
+                preview.load = PreviewLoad::Loaded {
+                    generation,
+                    listing,
+                    ordered,
+                };
             }
             Err(error) => {
                 self.application.set_column_preview(view, None);
@@ -393,8 +477,12 @@ impl Desktop {
         if !self.file_view_input_enabled(view) {
             return Task::none();
         }
+        self.type_jump.dismiss_session();
+        if let Some(state) = self.views.get_mut(&view) {
+            state.earlier_ancestors = false;
+        }
         self.column_previews.clear_selection(view);
-        self.active_view = Some(view);
+        self.activate_column_preview(view);
         self.focus_canvas()
     }
 
@@ -417,6 +505,11 @@ impl Desktop {
         if !exists {
             return Task::none();
         }
+        self.type_jump.dismiss_session();
+        if let Some(state) = self.views.get_mut(&view) {
+            state.earlier_ancestors = false;
+        }
+        let was_active = self.active_view == Some(view);
         let already_selected = self
             .column_previews
             .views
@@ -424,7 +517,7 @@ impl Desktop {
             .is_some_and(|preview| preview.selected.as_deref() == Some(path.as_path()));
         if self.modifiers.command() && already_selected {
             self.column_previews.clear_selection(view);
-            self.active_view = Some(view);
+            self.activate_column_preview(view);
             self.focused_path = None;
             self.focus_version = self.focus_version.saturating_add(1);
             return iced::widget::operation::focus("workspace-canvas");
@@ -432,16 +525,24 @@ impl Desktop {
         if let Some(preview) = self.column_previews.views.get_mut(&view) {
             preview.selected = Some(path.clone());
         }
-        let release = if already_selected && !self.modifiers.shift() && !self.modifiers.command() {
+        let release = if was_active
+            && already_selected
+            && !self.modifiers.shift()
+            && !self.modifiers.command()
+        {
             crate::menus::file_drag::ClickRelease::DeselectColumnPreview
         } else {
             crate::menus::file_drag::ClickRelease::Keep
         };
-        self.active_view = Some(view);
+        self.activate_column_preview(view);
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
+        self.demand_single_thumbnail(view, &path);
         self.begin_file_drag(view, path, release);
-        iced::widget::operation::focus("workspace-canvas")
+        Task::batch([
+            self.fill_thumbnails(),
+            iced::widget::operation::focus("workspace-canvas"),
+        ])
     }
 
     pub(crate) fn open_column_preview_entry(
@@ -457,6 +558,8 @@ impl Desktop {
         else {
             return Task::none();
         };
+        self.type_jump.dismiss_session();
+        self.activate_view(view);
         if entry_kind != EntryKind::Directory {
             return self.dispatch(Action::OpenFile(view, path));
         }
@@ -482,6 +585,8 @@ impl Desktop {
         };
         let target_dir = preview.directory.clone();
         let focus_target = preview.selected.clone();
+        self.type_jump.dismiss_session();
+        self.activate_view(view);
         let presentation = self.views.entry(view).or_default();
         presentation.earlier_ancestors = false;
         presentation.column_focus = focus_target.map(|target| ColumnFocus {
@@ -510,10 +615,16 @@ impl Desktop {
         Task::none()
     }
 
-    pub(super) fn scroll_column_preview(&mut self, view: ViewId, offset_y: f32) -> Task<Message> {
+    pub(super) fn scroll_column_preview(
+        &mut self,
+        view: ViewId,
+        generation: u64,
+        offset_y: f32,
+    ) -> Task<Message> {
         if self.workspace_input_enabled()
             && self.application.workspace().can_browse(view)
             && let Some(preview) = self.column_previews.views.get_mut(&view)
+            && matches!(preview.load, PreviewLoad::Loaded { generation: g, .. } if g == generation)
         {
             preview.scroll_y = offset_y;
         }
@@ -545,9 +656,12 @@ struct DesiredPreview {
 }
 
 fn collect_desired_previews(desktop: &Desktop) -> HashMap<ViewId, DesiredPreview> {
+    let geometry = desktop.geometry();
     let mut out = HashMap::new();
     for item in desktop.application.workspace().boxes() {
-        if item.settings.file_view != FileView::Columns {
+        if item.settings.file_view != FileView::Columns
+            || !crate::boxes::folder_box::scroller_geometry(geometry, item).two_columns
+        {
             continue;
         }
         let active = item.active_view();
@@ -678,12 +792,14 @@ pub(super) fn folder_preview<'a>(
         PreviewLoad::Loading { .. } => status_note(ty, palette.muted, "Loading…"),
         PreviewLoad::Failed { message, .. } => status_note(ty, palette.error, message),
         PreviewLoad::Loaded {
-            listing, ordered, ..
+            generation,
+            listing,
+            ordered,
         } => {
             let body = if ordered.is_empty() {
                 status_note(ty, palette.muted, "Empty folder")
             } else {
-                preview_list(props, preview, listing, ordered)
+                preview_list(props, preview, *generation, listing, ordered)
             };
             crate::menus::folder_menu::preview_target(props.view, props.interactive, body)
         }
@@ -704,6 +820,7 @@ fn status_note<'a>(
 fn preview_list<'a>(
     props: file_list::Props<'a>,
     preview: &'a ViewPreview,
+    generation: u64,
     listing: &'a DirectoryListing,
     ordered: &'a [usize],
 ) -> Element<'a, Message> {
@@ -739,7 +856,7 @@ fn preview_list<'a>(
         .height(Fill)
         .style(palette.scrollable())
         .on_scroll(move |viewport| {
-            Message::ColumnPreviewScrolled(view, viewport.absolute_offset().y)
+            Message::ColumnPreviewScrolled(view, generation, viewport.absolute_offset().y)
         })
         .into()
 }

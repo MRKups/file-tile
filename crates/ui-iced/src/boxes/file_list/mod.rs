@@ -76,6 +76,129 @@ pub(crate) fn observe_scroll(view: ViewId, generation: u64) -> Task<Message> {
     })
 }
 
+pub(crate) struct RevealScroll {
+    id: Id,
+    top: f32,
+    bottom: f32,
+    window: Option<ScrollWindow>,
+}
+
+impl RevealScroll {
+    pub fn new(id: impl Into<Id>, top: f32, bottom: f32) -> Self {
+        Self {
+            id: id.into(),
+            top,
+            bottom,
+            window: None,
+        }
+    }
+}
+
+pub(crate) fn reveal_scroll_offset(
+    current_y: f32,
+    viewport_h: f32,
+    content_h: f32,
+    top: f32,
+    bottom: f32,
+) -> f32 {
+    let max_y = (content_h - viewport_h).max(0.0);
+    let raw_y = if top < current_y || viewport_h < (bottom - top) {
+        top
+    } else if bottom > current_y + viewport_h {
+        bottom - viewport_h
+    } else {
+        current_y
+    };
+    raw_y.clamp(0.0, max_y).round()
+}
+
+impl Operation<ScrollWindow> for RevealScroll {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<ScrollWindow>)) {
+        if self.window.is_none() {
+            operate(self);
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content: Rectangle,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
+        if id == Some(&self.id) {
+            let next_y = reveal_scroll_offset(
+                translation.y,
+                bounds.height,
+                content.height,
+                self.top,
+                self.bottom,
+            );
+            if (next_y - translation.y).abs() > f32::EPSILON {
+                state.scroll_to(iced::widget::scrollable::AbsoluteOffset {
+                    x: None,
+                    y: Some(next_y),
+                });
+            }
+            self.window = Some(ScrollWindow {
+                offset: next_y,
+                height: bounds.height,
+            });
+        }
+    }
+
+    fn finish(&self) -> Outcome<ScrollWindow> {
+        self.window.map_or(Outcome::None, Outcome::Some)
+    }
+}
+
+pub(crate) fn reveal_scroll(view: ViewId, generation: u64, top: f32, bottom: f32) -> Task<Message> {
+    widget::operate(RevealScroll::new(scroll_id(view), top, bottom)).map(move |window| {
+        Message::ListingScrollObserved {
+            view,
+            generation,
+            window,
+        }
+    })
+}
+
+pub(crate) fn entry_vertical_bounds(
+    display_index: usize,
+    listing: &crate::application::contracts::directory::DirectoryListing,
+    order: Option<&[usize]>,
+    show_hidden: bool,
+    motion: Option<&entry_motion::ViewMotion>,
+    ty: crate::window::typography::Style,
+) -> (f32, f32, f32) {
+    let count = listing.display_len(show_hidden);
+    let row_h = ty.row(ROW_HEIGHT);
+    if let Some(motion) = motion.filter(|item| item.has_layout_motion()) {
+        let slots = motion.project_slots(listing, order, show_hidden);
+        let mut cursor = 0.0;
+        let mut found = None;
+        for slot in &slots {
+            let slot_h = slot.height(row_h);
+            if let entry_motion::Slot::Live { index, .. } = *slot
+                && index == display_index
+            {
+                found = Some((cursor, cursor + slot_h));
+            }
+            cursor += slot_h;
+        }
+        let (top, bottom) = found.unwrap_or((
+            display_index as f32 * row_h,
+            (display_index + 1) as f32 * row_h,
+        ));
+        return (top, bottom, cursor);
+    }
+    (
+        display_index as f32 * row_h,
+        (display_index + 1) as f32 * row_h,
+        count as f32 * row_h,
+    )
+}
+
 #[derive(Clone, Copy)]
 pub struct Props<'a> {
     pub order: Option<&'a [usize]>,

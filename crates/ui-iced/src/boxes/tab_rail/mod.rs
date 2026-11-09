@@ -115,7 +115,8 @@ impl crate::Desktop {
                 .any(|item| item.id == *id)
         });
         if let Some((view, tabbed)) = activated {
-            self.active_view = Some(view);
+            self.type_jump.dismiss_session();
+            self.activate_view(view);
             self.focused_path = None;
             self.focus_version = self.focus_version.saturating_add(1);
             if tabbed {
@@ -128,6 +129,11 @@ impl crate::Desktop {
         }
     }
     pub(crate) fn focus_tab(&mut self, view: ViewId) -> iced::Task<Message> {
+        if self.application.workspace().mode() == crate::domain::Mode::Browse
+            && self.application.workspace().is_active(view)
+        {
+            self.activate_view(view);
+        }
         let Some(item) = self.application.workspace().boxes().iter().find(|item| {
             item.tabs.as_ref().is_some_and(|tabs| {
                 tabs.visible() && tabs.views().iter().any(|item| item.view == view)

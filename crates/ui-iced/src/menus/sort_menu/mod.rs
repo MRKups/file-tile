@@ -108,7 +108,7 @@ impl Desktop {
         let mode = self.application.workspace().mode();
         self.clear_context_menus();
         self.prepare_context_menu();
-        self.active_view = Some(view);
+        self.activate_view(view);
         self.next_sort_menu_generation = generation;
         self.sort_menu = Some(Menu {
             generation,

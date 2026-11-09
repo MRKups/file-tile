@@ -188,7 +188,11 @@ impl Desktop {
             state.selected = Some(path.clone());
             state.hint = None;
         }
-        self.active_view = Some(view);
+        if in_preview {
+            self.activate_column_preview(view);
+        } else {
+            self.activate_view(view);
+        }
         let menu = Menu {
             generation,
             view,
@@ -387,7 +391,7 @@ impl Desktop {
         if !matches!(command, Command::Details | Command::DetailsHover(true)) {
             return Task::none();
         }
-        self.demand_thumbnails(view, std::slice::from_ref(&path));
+        self.demand_single_thumbnail(view, &path);
         let thumbnails = self.fill_thumbnails();
         let metadata = if self.application.metadata(view, &path).is_none()
             && !self

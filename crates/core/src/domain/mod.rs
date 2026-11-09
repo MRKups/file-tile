@@ -23,6 +23,7 @@ pub use workspace::{
     UndoOutcome, ViewId, ViewRef, Workspace,
 };
 pub mod files;
+pub mod matching;
 pub mod safety;
 pub mod sorting;
 pub mod validation;

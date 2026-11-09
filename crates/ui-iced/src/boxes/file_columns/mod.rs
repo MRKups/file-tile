@@ -52,8 +52,8 @@ impl Desktop {
             Message::ColumnPreviewHovered(view, path, hovered) => {
                 self.hover_column_preview_entry(view, path, hovered)
             }
-            Message::ColumnPreviewScrolled(view, offset_y) => {
-                self.scroll_column_preview(view, offset_y)
+            Message::ColumnPreviewScrolled(view, generation, offset_y) => {
+                self.scroll_column_preview(view, generation, offset_y)
             }
             _ => Task::none(),
         }
@@ -81,6 +81,8 @@ impl Desktop {
             .ok()
             .and_then(|rel| rel.components().next())
             .map(|comp| path.join(comp));
+        self.type_jump.dismiss_session();
+        self.activate_view(view);
         let state = self.views.entry(view).or_default();
         state.earlier_ancestors = false;
         state.column_focus = branch_child.map(|target| ColumnFocus {
@@ -91,12 +93,37 @@ impl Desktop {
     }
 
     fn toggle_earlier_ancestors(&mut self, view: ViewId) -> Task<Message> {
-        if !self.is_browsable_columns_view(view) {
+        if !self.is_browsable_columns_view(view) || !self.can_show_earlier_ancestors(view) {
             return Task::none();
+        }
+        self.type_jump.dismiss_session();
+        self.activate_view(view);
+        for (other, state) in &mut self.views {
+            if *other != view {
+                state.earlier_ancestors = false;
+            }
         }
         let state = self.views.entry(view).or_default();
         state.earlier_ancestors = !state.earlier_ancestors;
         Task::none()
+    }
+
+    pub(crate) fn can_show_earlier_ancestors(&self, view: ViewId) -> bool {
+        if !self.application.workspace().is_active(view) {
+            return false;
+        }
+        let Some(item) = self.application.workspace().box_for_view(view) else {
+            return false;
+        };
+        if item.settings.file_view != FileView::Columns
+            || crate::boxes::folder_box::scroller_geometry(self.geometry(), item).compact
+        {
+            return false;
+        }
+        self.application
+            .workspace()
+            .view(view)
+            .is_some_and(|v| v.navigation.allowed_ancestors().nth(1).is_some())
     }
 
     fn is_browsable_columns_view(&self, view: ViewId) -> bool {

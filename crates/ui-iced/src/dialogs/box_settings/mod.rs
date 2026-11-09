@@ -231,7 +231,7 @@ impl Desktop {
         }
         self.focused_path = focused;
         if let Some(view) = focused {
-            self.active_view = Some(view);
+            self.activate_view(view);
             // A captured click can leave another editor focused beneath the stack.
             return operation::focus(navigation_header::path_id(view));
         }

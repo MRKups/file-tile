@@ -403,7 +403,7 @@ impl Desktop {
     ) -> Task<Message> {
         match target {
             Some(DropTarget::FolderBox { view, .. }) => {
-                self.active_view = Some(view);
+                self.activate_view(view);
                 self.anchor_file_prompt(view, point);
                 self.transfer_paths_into(view, paths, moving)
             }

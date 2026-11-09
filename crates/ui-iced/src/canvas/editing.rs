@@ -16,7 +16,14 @@ impl Desktop {
     pub(crate) fn prepare_action_focus(&mut self, action: &Action) -> bool {
         self.observe_file_action_presentation(action);
         if matches!(action, Action::ActivateLauncher(_)) {
-            self.active_view = None;
+            self.deactivate_all_views();
+        } else if let Action::Navigate(view, nav) = action
+            && !matches!(nav, crate::application::Navigate::Refresh)
+            && self.application.workspace().mode() == crate::domain::Mode::Browse
+            && self.application.workspace().can_browse(*view)
+        {
+            self.type_jump.dismiss_session();
+            self.activate_view(*view);
         }
         matches!(
             action,
@@ -49,6 +56,7 @@ impl Desktop {
         self.views.clear();
         self.tab_offsets.clear();
         self.active_view = None;
+        self.type_jump = crate::runtime::type_jump::State::default();
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
         self.canvas_offset = iced::Vector::ZERO;

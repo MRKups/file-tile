@@ -154,10 +154,9 @@ fn boxes<'a>(
                 item,
                 load: application.load(view),
                 presentation: presentations.get(&view),
-                operation: application.file_operation().filter(|operation| {
-                    operation.view == view
-                        && item.active_view().navigation.current() == operation.directory
-                }),
+                operation: application
+                    .file_operation()
+                    .filter(|operation| operation.view == view),
                 conflict_name: presentation.conflict_name,
                 thumbnails: Some(presentation.thumbnails),
                 files_closing: application.files_closing(),

@@ -18,7 +18,56 @@ pub(crate) struct ListingCompletionContext {
     )>,
 }
 
+pub(crate) type BoxSnapshot = (
+    std::collections::HashMap<crate::domain::BoxId, ViewId>,
+    std::collections::HashMap<crate::domain::BoxId, crate::domain::GridRect>,
+);
+
 impl Desktop {
+    pub(crate) fn snapshot_boxes_before(&self) -> BoxSnapshot {
+        let mut active = std::collections::HashMap::new();
+        let mut rects = std::collections::HashMap::new();
+        for item in self.application.workspace().boxes() {
+            active.insert(item.id, item.active_view().view);
+            rects.insert(item.id, item.rect);
+        }
+        (active, rects)
+    }
+
+    pub(crate) fn reconcile_boxes_after(
+        &mut self,
+        (active_before, rects_before): BoxSnapshot,
+    ) -> Task<Message> {
+        let resized = self.application.workspace().boxes().iter().any(|item| {
+            rects_before
+                .get(&item.id)
+                .is_some_and(|prev| *prev != item.rect)
+        });
+        Task::batch([
+            self.reconcile_tab_activation(active_before),
+            if resized {
+                self.reobserve_active_scrolls()
+            } else {
+                Task::none()
+            },
+        ])
+    }
+
+    pub(crate) fn reobserve_active_scrolls(&self) -> Task<Message> {
+        let tasks: Vec<Task<Message>> = self
+            .application
+            .workspace()
+            .boxes()
+            .iter()
+            .filter_map(|item| {
+                let view = item.active_view().view;
+                let state = self.views.get(&view)?;
+                Some(file_list::observe_scroll(view, state.listing_revision))
+            })
+            .collect();
+        Task::batch(tasks)
+    }
+
     pub(crate) fn complete_listing_task(
         &mut self,
         context: Option<ListingCompletionContext>,
@@ -42,13 +91,16 @@ impl Desktop {
                 if !self.file_view_input_enabled(view) {
                     return Task::none();
                 }
+                self.type_jump.dismiss_session();
                 let state = self.views.entry(view).or_default();
                 state.selected = None;
                 state.selection.clear();
                 state.pending_selection.clear();
                 state.reveal_selected = false;
+                state.reveal_after_motion = false;
+                state.earlier_ancestors = false;
                 state.selection_anchor = None;
-                self.active_view = Some(view);
+                self.activate_view(view);
                 self.focus_canvas()
             }
             Message::FileViewportScrolled(view, offset, height) => {
@@ -188,6 +240,52 @@ impl Desktop {
         }
     }
 
+    fn reload_reveal_target(&self, view: ViewId) -> Option<(f32, f32)> {
+        let list_mode = self
+            .application
+            .workspace()
+            .view(view)
+            .is_some_and(|item| item.settings.file_view == crate::domain::FileView::List);
+        if !list_mode {
+            return None;
+        }
+        let selected = self.views.get(&view)?.selected.as_ref()?;
+        let index = self
+            .application
+            .ordered_entries(view)
+            .position(|entry| &entry.path == selected)?;
+        let row_height = crate::window::typography::Style(self.application.typography())
+            .row(file_list::ROW_HEIGHT);
+        Some((index as f32 * row_height, (index + 1) as f32 * row_height))
+    }
+
+    fn finish_settled_reload_reveal(
+        &mut self,
+        view: ViewId,
+        intent: NavigationIntent,
+        succeeded: bool,
+    ) -> Task<Message> {
+        let should_consume = self.views.get(&view).is_some_and(|state| {
+            state.reveal_after_motion
+                && (!succeeded
+                    || state
+                        .motion
+                        .as_ref()
+                        .is_none_or(|motion| !motion.has_layout_motion()))
+        });
+        if !should_consume {
+            return Task::none();
+        }
+        if let Some(state) = self.views.get_mut(&view) {
+            state.reveal_after_motion = false;
+        }
+        if succeeded && intent == NavigationIntent::Reload {
+            self.reveal_selected_entry(view)
+        } else {
+            Task::none()
+        }
+    }
+
     pub(crate) fn completed_listing(
         &mut self,
         view: ViewId,
@@ -207,19 +305,7 @@ impl Desktop {
             .workspace()
             .view(view)
             .is_some_and(|item| item.settings.show_hidden);
-        let row_height = crate::window::typography::Style(self.application.typography())
-            .row(file_list::ROW_HEIGHT);
-        let list_mode = self
-            .application
-            .workspace()
-            .view(view)
-            .is_some_and(|item| item.settings.file_view == crate::domain::FileView::List);
-        let selected_index = self.views.get(&view).and_then(|state| {
-            let selected = state.selected.as_ref()?;
-            self.application
-                .ordered_entries(view)
-                .position(|entry| &entry.path == selected)
-        });
+        let reveal_target = self.reload_reveal_target(view);
         let presentation = self.views.entry(view).or_default();
         let unchanged_draft =
             presentation.submitted_revision == Some((generation, presentation.draft_revision));
@@ -244,9 +330,6 @@ impl Desktop {
                     if intent == NavigationIntent::Reload {
                         reloaded_dir = Some(listing.directory.clone());
                     }
-                    let reveal_target = selected_index
-                        .filter(|_| list_mode)
-                        .map(|index| (index as f32 * row_height, (index + 1) as f32 * row_height));
                     task = reconcile_reload_listing(
                         view,
                         generation,
@@ -283,7 +366,8 @@ impl Desktop {
         if let Some(dir) = reloaded_dir {
             self.column_previews.invalidate_directory(&dir);
         }
-        task
+        let settled_reveal = self.finish_settled_reload_reveal(view, intent, succeeded);
+        Task::batch([task, settled_reveal])
     }
 }
 
@@ -304,6 +388,7 @@ fn reset_navigated_presentation(
     presentation.selection.clear();
     presentation.pending_selection.clear();
     presentation.reveal_selected = false;
+    presentation.reveal_after_motion = false;
     presentation.selection_anchor = None;
     presentation.name_draft = None;
     presentation.hovered = None;

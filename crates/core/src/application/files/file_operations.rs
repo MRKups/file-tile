@@ -218,14 +218,20 @@ impl Application {
     }
 
     fn has_ready_directory(&self, view: ViewId, directory: &std::path::Path) -> bool {
-        (self
+        let primary_ready = self
             .workspace
             .view(view)
-            .is_some_and(|v| v.navigation.current() == directory)
-            && matches!(self.load(view), Some(LoadState::Ready(listing)) if listing.directory == directory))
-            || self
-                .valid_column_preview(view)
-                .is_some_and(|listing| listing.directory == directory)
+            .is_some_and(|v| {
+                matches!(self.load(view), Some(LoadState::Ready(listing)) if listing.directory == v.navigation.current())
+            });
+        primary_ready
+            && (self
+                .workspace
+                .view(view)
+                .is_some_and(|v| v.navigation.current() == directory)
+                || self
+                    .valid_column_preview(view)
+                    .is_some_and(|listing| listing.directory == directory))
     }
 
     pub fn rename_guidance(

@@ -74,7 +74,11 @@ impl Desktop {
             state.selection.clear();
             state.hint = None;
         }
-        self.active_view = Some(view);
+        if in_preview {
+            self.activate_column_preview(view);
+        } else {
+            self.activate_view(view);
+        }
         self.folder_menu = Some(Menu {
             generation,
             view,

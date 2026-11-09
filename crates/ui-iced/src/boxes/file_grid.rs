@@ -14,6 +14,43 @@ const LABEL_LINE_HEIGHT: f32 = 1.25;
 pub(crate) fn columns(width: f32, ty: crate::window::typography::Style) -> usize {
     ((width - 18.0).max(84.0) / ty.row(92.0)).floor().max(1.0) as usize
 }
+
+pub(crate) fn entry_vertical_bounds(
+    display_index: usize,
+    content_width: f32,
+    listing: &crate::application::contracts::directory::DirectoryListing,
+    order: Option<&[usize]>,
+    show_hidden: bool,
+    motion: Option<&entry_motion::ViewMotion>,
+    ty: crate::window::typography::Style,
+) -> (f32, f32, f32) {
+    let count = listing.display_len(show_hidden);
+    let cols = columns(content_width, ty);
+    let tile_h = ty.row(TILE_HEIGHT);
+    if let Some(motion) = motion.filter(|item| item.has_deletions()) {
+        let slots = motion.project_slots(listing, order, show_hidden);
+        let slot_idx = slots
+            .iter()
+            .position(|slot| {
+                matches!(slot, entry_motion::Slot::Live { index, .. } if *index == display_index)
+            })
+            .unwrap_or(display_index);
+        let row_idx = slot_idx / cols;
+        let total_rows = slots.len().div_ceil(cols);
+        return (
+            row_idx as f32 * tile_h,
+            (row_idx + 1) as f32 * tile_h,
+            total_rows as f32 * tile_h,
+        );
+    }
+    let row_idx = display_index / cols;
+    let total_rows = count.div_ceil(cols);
+    (
+        row_idx as f32 * tile_h,
+        (row_idx + 1) as f32 * tile_h,
+        total_rows as f32 * tile_h,
+    )
+}
 pub(crate) fn range(count: usize, props: Props<'_>) -> std::ops::Range<usize> {
     let columns = columns(props.width, props.palette.typography);
     let rows = count.div_ceil(columns);

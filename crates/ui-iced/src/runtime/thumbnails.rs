@@ -98,20 +98,71 @@ impl Desktop {
             .collect();
         self.prune_queued_view_thumbnails(view, revision, &supported);
         for path in supported {
-            let key = (view, revision, path);
-            if self.thumbnails.values.contains_key(&key) {
-                continue;
+            self.enqueue_thumbnail((view, revision, path), false);
+        }
+    }
+
+    pub(crate) fn demand_single_thumbnail(&mut self, view: ViewId, path: &Path) {
+        if self.thumbnails.workers.is_none()
+            || !self.application.workspace().can_browse(view)
+            || !image_candidate(path)
+        {
+            return;
+        }
+        let Some(item) = self.application.workspace().view(view) else {
+            return;
+        };
+        let menu_target = self
+            .entry_menu
+            .as_ref()
+            .filter(|menu| menu.view == view)
+            .map(|menu| menu.path.as_path());
+        if item.settings.file_view == FileView::List && menu_target.is_none() {
+            return;
+        }
+        let Some(listing) = self.application.load(view).and_then(LoadState::listing) else {
+            return;
+        };
+        let valid = listing
+            .entry(path)
+            .or_else(|| self.column_previews.entry(view, path))
+            .is_some_and(|entry| {
+                entry.kind == EntryKind::File && (item.settings.show_hidden || !entry.hidden)
+            });
+        if !valid {
+            return;
+        }
+        let revision = self
+            .views
+            .get(&view)
+            .map_or(0, |state| state.listing_revision);
+        self.enqueue_thumbnail((view, revision, path.to_path_buf()), true);
+    }
+
+    fn enqueue_thumbnail(&mut self, key: Key, front: bool) {
+        if self.thumbnails.values.contains_key(&key) {
+            if front
+                && let Some(pos) = self.thumbnails.queue.iter().position(|item| item == &key)
+                && pos > 0
+                && let Some(queued) = self.thumbnails.queue.remove(pos)
+            {
+                self.thumbnails.queue.push_front(queued);
             }
-            while self.thumbnails.values.len() >= CACHE_LIMIT {
-                let Some(oldest) = self.thumbnails.order.pop_front() else {
-                    break;
-                };
-                self.thumbnails.values.remove(&oldest);
-                self.thumbnails.pending.remove(&oldest);
-                self.thumbnails.queue.retain(|key| key != &oldest);
-            }
-            self.thumbnails.order.push_back(key.clone());
-            self.thumbnails.values.insert(key.clone(), None);
+            return;
+        }
+        while self.thumbnails.values.len() >= CACHE_LIMIT {
+            let Some(oldest) = self.thumbnails.order.pop_front() else {
+                break;
+            };
+            self.thumbnails.values.remove(&oldest);
+            self.thumbnails.pending.remove(&oldest);
+            self.thumbnails.queue.retain(|item| item != &oldest);
+        }
+        self.thumbnails.order.push_back(key.clone());
+        self.thumbnails.values.insert(key.clone(), None);
+        if front {
+            self.thumbnails.queue.push_front(key);
+        } else {
             self.thumbnails.queue.push_back(key);
         }
     }

@@ -19,6 +19,15 @@ impl Desktop {
         // Keep routing aligned with visible overlays, with recovery first.
         if self.storage_details && self.application.storage_detail().is_some() {
             Some(self.recovery_input(event.clone()))
+        } else if self.native_menu.error().is_some() {
+            Some(match event {
+                Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                    repeat: false,
+                    ..
+                }) => iced::widget::operation::focus("native-menu-close"),
+                _ => iced::Task::none(),
+            })
         } else if self.workspace_management.is_some() {
             Some(self.workspace_management_input(event.clone()))
         } else if self.about.is_some() {

@@ -15,12 +15,32 @@ use iced::{
     Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, mouse, widget::scrollable,
     window,
 };
+use std::rc::Rc;
 use std::time::Instant;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ScrollViewport {
+    offset: scrollable::AbsoluteOffset,
+    bounds: Rectangle,
+}
+
+impl ScrollViewport {
+    pub fn absolute_offset(&self) -> scrollable::AbsoluteOffset {
+        self.offset
+    }
+
+    pub fn bounds(&self) -> Rectangle {
+        self.bounds
+    }
+}
+
+type ScrollHandler<'a> = Rc<dyn Fn(ScrollViewport) -> Message + 'a>;
 
 pub(crate) struct Area<'a> {
     inner: scrollable::Scrollable<'a, Message>,
     direction: scrollable::Direction,
     style: scrollable::StyleFn<'a, Theme>,
+    on_scroll: Option<ScrollHandler<'a>>,
 }
 
 #[derive(Default)]
@@ -45,6 +65,7 @@ pub(crate) fn scroll_area<'a>(content: impl Into<Element<'a, Message>>) -> Area<
         }),
         direction: scrollable::Direction::Vertical(crate::window::appearance::scrollbar()),
         style: Box::new(crate::window::appearance::scrollable),
+        on_scroll: None,
     }
 }
 
@@ -66,8 +87,16 @@ impl<'a> Area<'a> {
         self.inner = self.inner.direction(direction);
         self
     }
-    pub fn on_scroll(mut self, handler: impl Fn(scrollable::Viewport) -> Message + 'a) -> Self {
-        self.inner = self.inner.on_scroll(handler);
+    pub fn on_scroll(mut self, handler: impl Fn(ScrollViewport) -> Message + 'a) -> Self {
+        let shared: ScrollHandler<'a> = Rc::new(handler);
+        let for_inner = Rc::clone(&shared);
+        self.inner = self.inner.on_scroll(move |viewport| {
+            for_inner(ScrollViewport {
+                offset: viewport.absolute_offset(),
+                bounds: viewport.bounds(),
+            })
+        });
+        self.on_scroll = Some(shared);
         self
     }
     pub fn style(
@@ -172,6 +201,7 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
         } else {
             Instant::now()
         };
+        let before_offset = tree.state.downcast_ref::<State>().sample.offset;
         let input = tree.state.downcast_mut::<State>().rail_input(
             event,
             cursor,
@@ -179,10 +209,12 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
             self.direction,
             now,
         );
+        let mut rail_scrolled = false;
         if let Some(input) = input {
             if let Some(mut offset) = input.offset {
                 self.inner
                     .operate(&mut tree.children[0], layout, renderer, &mut offset);
+                rail_scrolled = true;
             }
             shell.capture_event();
             shell.request_redraw();
@@ -200,6 +232,18 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
         }
         self.sample(tree, layout, renderer);
         let state = tree.state.downcast_mut::<State>();
+        if rail_scrolled
+            && state.sample.offset != before_offset
+            && let Some(on_scroll) = &self.on_scroll
+        {
+            shell.publish(on_scroll(ScrollViewport {
+                offset: scrollable::AbsoluteOffset {
+                    x: state.sample.offset.x,
+                    y: state.sample.offset.y,
+                },
+                bounds: state.sample.bounds,
+            }));
+        }
         let hovered = cursor.position().is_some_and(|point| {
             viewport.contains(point)
                 && state

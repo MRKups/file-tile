@@ -113,7 +113,7 @@ enum Message {
     ColumnPreviewSelected(ViewId, PathBuf),
     ColumnPreviewOpened(ViewId, PathBuf),
     ColumnPreviewHovered(ViewId, PathBuf, bool),
-    ColumnPreviewScrolled(ViewId, f32),
+    ColumnPreviewScrolled(ViewId, u64, f32),
     TreeChosen(ViewId, PathBuf),
     TreeScrolled(ViewId, f32),
     RangeStartChanged(ViewId, String),
@@ -143,6 +143,7 @@ enum Message {
         window: file_list::ScrollWindow,
     },
     MotionFrame(std::time::Instant),
+    TypeJumpBeginFade(std::time::Instant),
     CanvasScrolled(Vector),
     DragWindow,
     LayoutPressed {
@@ -198,6 +199,7 @@ struct ViewPresentation {
     selection: std::collections::HashSet<PathBuf>,
     pending_selection: std::collections::HashSet<PathBuf>,
     reveal_selected: bool,
+    reveal_after_motion: bool,
     selection_anchor: Option<PathBuf>,
     draft: Option<String>,
     draft_revision: u64,
@@ -307,6 +309,7 @@ struct Desktop {
     tab_offsets: HashMap<crate::domain::BoxId, f32>,
     tab_drag: Option<tab_drag::Drag>,
     file_drag: file_drag::State,
+    type_jump: runtime::type_jump::State,
     edit_anchor: Option<editing::Anchor>,
     folder_watcher: Option<Arc<crate::filesystem::DirectoryWatcher>>,
     watch_listener: Option<iced::task::Handle>,
@@ -378,6 +381,7 @@ impl Desktop {
             tab_offsets: HashMap::new(),
             tab_drag: None,
             file_drag: file_drag::State::default(),
+            type_jump: runtime::type_jump::State::default(),
             edit_anchor: None,
             folder_watcher: None,
             watch_listener: None,
@@ -471,6 +475,7 @@ impl Desktop {
 
     fn has_active_entry_motion(&self) -> bool {
         self.file_drag.is_animating()
+            || self.type_jump.is_fading()
             || self.views.values().any(|state| state.motion.is_some())
             || self
                 .entry_menu
@@ -478,12 +483,14 @@ impl Desktop {
                 .is_some_and(entry_menu::Menu::is_hover_waiting)
     }
 
-    fn tick_entry_motion(&mut self, now: std::time::Instant) {
+    fn tick_entry_motion(&mut self, now: std::time::Instant) -> Task<Message> {
         self.file_drag.tick(now);
+        self.type_jump.tick(now);
         if let Some(menu) = &mut self.entry_menu {
             menu.tick(now);
         }
-        for state in self.views.values_mut() {
+        let mut reveal_views = Vec::new();
+        for (&view, state) in &mut self.views {
             if state
                 .motion
                 .as_mut()
@@ -491,6 +498,24 @@ impl Desktop {
             {
                 state.motion = None;
             }
+            if state.reveal_after_motion
+                && state
+                    .motion
+                    .as_ref()
+                    .is_none_or(|motion| !motion.has_layout_motion())
+            {
+                state.reveal_after_motion = false;
+                reveal_views.push(view);
+            }
+        }
+        if reveal_views.is_empty() {
+            Task::none()
+        } else {
+            Task::batch(
+                reveal_views
+                    .into_iter()
+                    .map(|view| self.reveal_selected_entry(view)),
+            )
         }
     }
 
@@ -513,8 +538,7 @@ impl Desktop {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         if let Message::MotionFrame(now) = message {
-            self.tick_entry_motion(now);
-            return Task::none();
+            return self.tick_entry_motion(now);
         }
         if let Message::WorkspaceEpoch(epoch, message) = message {
             return if epoch == self.application.workspace_epoch() {
@@ -537,6 +561,10 @@ impl Desktop {
             Message::Updates(action) => self.updates_action(action),
             Message::ThumbnailCompleted(receipt) => self.thumbnail_completed(receipt),
             Message::FlushExternalDrop => self.flush_external_drop(),
+            Message::TypeJumpBeginFade(now) => {
+                self.type_jump.begin_fade(now);
+                Task::none()
+            }
             Message::NativeQuit(epoch) => self.native_quit(epoch),
             Message::NativeMenu(request) => self.native_menu(request),
             Message::WindowAppearanceObserved(capability) => {
@@ -556,10 +584,12 @@ impl Desktop {
         let outbound = self.reconcile_outbound_drag();
         let picker = self.reconcile_picker();
         let column_previews = self.sync_column_previews();
+        let file_actions = self.reconcile_file_actions();
+        self.reconcile_type_jump();
         self.sync_updates();
         self.sync_application_menu();
         self.sync_diagnostics();
-        Task::batch([task, outbound, picker, column_previews])
+        Task::batch([task, outbound, picker, column_previews, file_actions])
     }
 
     fn active_picker_generation(&self) -> Option<u64> {
@@ -743,13 +773,7 @@ impl Desktop {
         let recovery_visible_before =
             self.storage_details && self.application.storage_detail().is_some();
         let epoch_before = self.application.workspace_epoch();
-        let active_before: HashMap<_, _> = self
-            .application
-            .workspace()
-            .boxes()
-            .iter()
-            .map(|item| (item.id, item.active_view().view))
-            .collect();
+        let boxes_before = self.snapshot_boxes_before();
         let settings_before = self.visibility_before(&action);
         let undo_before = self.undo_views_before(&action);
         let restored = matches!((&action, self.application.persistence()),
@@ -788,6 +812,7 @@ impl Desktop {
         self.sync_box_settings();
         self.sync_launchers();
         self.reconcile_context_menus();
+        self.reconcile_type_jump();
         task = Task::batch([
             task,
             self.reconcile_box_settings(settings_before),
@@ -827,7 +852,7 @@ impl Desktop {
             if restored || switched {
                 Task::none()
             } else {
-                self.reconcile_tab_activation(active_before)
+                self.reconcile_boxes_after(boxes_before)
             },
         ])
     }

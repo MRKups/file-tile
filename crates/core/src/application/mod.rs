@@ -308,8 +308,14 @@ impl Application {
         if item.settings.file_view != crate::domain::FileView::Columns {
             return None;
         }
-        let LoadState::Ready(parent) = self.loads.get(&view)? else {
-            return None;
+        let parent = match self.loads.get(&view)? {
+            LoadState::Ready(parent) => parent,
+            LoadState::Loading {
+                intent: NavigationIntent::Reload | NavigationIntent::Activate,
+                previous: Some(parent),
+                ..
+            } => parent,
+            _ => return None,
         };
         if parent.directory != item.navigation.current() {
             return None;

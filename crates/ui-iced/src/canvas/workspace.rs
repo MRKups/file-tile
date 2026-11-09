@@ -91,7 +91,8 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
             surface,
             tab_drag::view(desktop, palettes.boxes),
             file_drag::view(desktop, palettes.boxes),
-            inspector
+            inspector,
+            crate::widgets::keystroke_hud::view(desktop, palettes.boxes),
         ],
     );
     overlay(desktop, surface, palettes.boxes)

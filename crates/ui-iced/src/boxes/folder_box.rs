@@ -62,6 +62,57 @@ pub(crate) fn is_compact(
     height < header + ty.row(34.0) * 2.0
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScrollerGeometry {
+    pub compact: bool,
+    pub content_width: f32,
+    pub nav_height: f32,
+    pub footer_height: f32,
+    pub viewport_height: f32,
+    pub two_columns: bool,
+}
+
+pub(crate) fn scroller_geometry(
+    geometry: CanvasGeometry,
+    item: &crate::domain::FolderBox,
+) -> ScrollerGeometry {
+    let ty = geometry.typography;
+    let box_rect = geometry.rect(item.rect);
+    let rail_width = tab_rail::width(item, box_rect.width);
+    let pane_width = (box_rect.width - rail_width).max(1.0);
+    let pane_height = box_rect.height;
+    let compact = is_compact(pane_width, pane_height, item.settings, ty)
+        || pane_width < navigation_header::minimum_width(item.settings);
+    let content_width = if compact {
+        pane_width.max(navigation_header::minimum_width(item.settings))
+    } else {
+        pane_width
+    };
+    let nav_height = navigation_header::height(content_width, item.settings, ty);
+    let footer_height = folder_status::height(ty);
+    let is_columns = !compact && item.settings.file_view == crate::domain::FileView::Columns;
+    let two_columns =
+        is_columns && content_width > crate::boxes::file_columns::TWO_COLUMN_MIN_WIDTH;
+    let col_header = if is_columns {
+        crate::boxes::file_columns::header_height(ty)
+    } else {
+        0.0
+    };
+    let viewport_height = if compact {
+        pane_height
+    } else {
+        (pane_height - nav_height - footer_height - col_header).max(0.0)
+    };
+    ScrollerGeometry {
+        compact,
+        content_width,
+        nav_height,
+        footer_height,
+        viewport_height,
+        two_columns,
+    }
+}
+
 pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
     if props.operation.is_some()
         || props
@@ -343,11 +394,6 @@ fn file_window(
     let height = (bottom.min(props.geometry.offset.y + props.geometry.viewport.height)
         - top.max(props.geometry.offset.y))
     .max(0.0);
-    let height = if scroll.height > 0.0 {
-        height.min(scroll.height)
-    } else {
-        height
-    };
     let offset = scroll.offset + clipped_top;
     file_list::ScrollWindow {
         offset: if compact {
