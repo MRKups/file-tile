@@ -179,6 +179,7 @@ impl Workspace {
         identity: &mut u64,
         count: usize,
     ) -> Result<bool, &'static str> {
+        let default_start = item.standalone.navigation.start().to_path_buf();
         let tabs = item
             .tabs
             .as_mut()
@@ -195,9 +196,7 @@ impl Workspace {
                 *identity = identity
                     .checked_add(1)
                     .ok_or("view identities are exhausted")?;
-                let navigation =
-                    Navigation::new(tabs.active_view().navigation.current().to_path_buf())
-                        .with_scope(tabs.active_view().navigation.scope().clone());
+                let navigation = Navigation::new(default_start);
                 tabs.views.push(FolderView {
                     view: ViewId(*identity),
                     navigation,
