@@ -123,7 +123,7 @@ pub(crate) fn content(props: Props<'_>) -> Element<'_, Message> {
     let mut children: Vec<(RowKey, Element<'_, Message>)> = vec![(
         RowKey::Before,
         space()
-            .height((range.start / columns) as f32 * tile_height)
+            .height(range.start.div_ceil(columns) as f32 * tile_height)
             .into(),
     )];
     for start in (range.start..range.end).step_by(columns) {
@@ -190,7 +190,7 @@ fn content_with_deletions<'a>(
     let mut children: Vec<(RowKey, Element<'_, Message>)> = vec![(
         RowKey::Before,
         space()
-            .height((range.start / columns) as f32 * tile_height)
+            .height(range.start.div_ceil(columns) as f32 * tile_height)
             .into(),
     )];
     for start in (range.start..range.end).step_by(columns) {

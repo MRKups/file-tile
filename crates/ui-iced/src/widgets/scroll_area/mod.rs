@@ -22,6 +22,7 @@ use std::time::Instant;
 pub(crate) struct ScrollViewport {
     offset: scrollable::AbsoluteOffset,
     bounds: Rectangle,
+    user_scrolled: bool,
 }
 
 impl ScrollViewport {
@@ -32,6 +33,10 @@ impl ScrollViewport {
     pub fn bounds(&self) -> Rectangle {
         self.bounds
     }
+
+    pub fn is_user_scroll(&self) -> bool {
+        self.user_scrolled
+    }
 }
 
 type ScrollHandler<'a> = Rc<dyn Fn(ScrollViewport) -> Message + 'a>;
@@ -41,6 +46,7 @@ pub(crate) struct Area<'a> {
     direction: scrollable::Direction,
     style: scrollable::StyleFn<'a, Theme>,
     on_scroll: Option<ScrollHandler<'a>>,
+    user_event: Rc<std::cell::Cell<bool>>,
 }
 
 #[derive(Default)]
@@ -66,6 +72,7 @@ pub(crate) fn scroll_area<'a>(content: impl Into<Element<'a, Message>>) -> Area<
         direction: scrollable::Direction::Vertical(crate::window::appearance::scrollbar()),
         style: Box::new(crate::window::appearance::scrollable),
         on_scroll: None,
+        user_event: Rc::new(std::cell::Cell::new(false)),
     }
 }
 
@@ -90,10 +97,12 @@ impl<'a> Area<'a> {
     pub fn on_scroll(mut self, handler: impl Fn(ScrollViewport) -> Message + 'a) -> Self {
         let shared: ScrollHandler<'a> = Rc::new(handler);
         let for_inner = Rc::clone(&shared);
+        let user_event = Rc::clone(&self.user_event);
         self.inner = self.inner.on_scroll(move |viewport| {
             for_inner(ScrollViewport {
                 offset: viewport.absolute_offset(),
                 bounds: viewport.bounds(),
+                user_scrolled: user_event.get(),
             })
         });
         self.on_scroll = Some(shared);
@@ -219,6 +228,8 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
             shell.capture_event();
             shell.request_redraw();
         } else {
+            let is_user_event = !matches!(event, Event::Window(window::Event::RedrawRequested(_)));
+            self.user_event.set(is_user_event);
             self.inner.update(
                 &mut tree.children[0],
                 event,
@@ -229,6 +240,7 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
                 shell,
                 viewport,
             );
+            self.user_event.set(false);
         }
         self.sample(tree, layout, renderer);
         let state = tree.state.downcast_mut::<State>();
@@ -242,6 +254,7 @@ impl Widget<Message, Theme, Renderer> for Area<'_> {
                     y: state.sample.offset.y,
                 },
                 bounds: state.sample.bounds,
+                user_scrolled: true,
             }));
         }
         let hovered = cursor.position().is_some_and(|point| {

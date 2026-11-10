@@ -255,6 +255,7 @@ impl Desktop {
         {
             self.activate_column_preview(view);
         } else {
+            self.cancel_pending_scroll_restore(view);
             self.activate_view(view);
         }
         self.focused_path = None;
@@ -479,6 +480,7 @@ impl Desktop {
         {
             self.activate_column_preview(view);
         } else {
+            self.cancel_pending_scroll_restore(view);
             self.activate_view(view);
         }
         self.focused_path = None;
@@ -589,6 +591,7 @@ impl Desktop {
                     .map(|cand| cand.entry.path.clone())
                     .collect();
                 self.type_jump.dismiss_session();
+                self.cancel_pending_scroll_restore(view);
                 self.column_previews.clear_selection(view);
                 self.column_previews.set_focused(None);
                 let state = self.views.entry(view).or_default();
@@ -637,6 +640,7 @@ impl Desktop {
                         .view(*view)
                         .is_some_and(|v| v.navigation.current() == directory);
                     if is_primary {
+                        self.cancel_pending_scroll_restore(*view);
                         if let Some(presentation) = self.views.get_mut(view) {
                             presentation.selection.clear();
                             presentation.pending_selection.clear();

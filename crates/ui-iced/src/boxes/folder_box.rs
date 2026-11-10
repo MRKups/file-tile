@@ -76,21 +76,29 @@ pub(crate) fn scroller_geometry(
     geometry: CanvasGeometry,
     item: &crate::domain::FolderBox,
 ) -> ScrollerGeometry {
+    scroller_geometry_with_settings(geometry, item, item.settings)
+}
+
+pub(crate) fn scroller_geometry_with_settings(
+    geometry: CanvasGeometry,
+    item: &crate::domain::FolderBox,
+    settings: crate::domain::BoxSettings,
+) -> ScrollerGeometry {
     let ty = geometry.typography;
     let box_rect = geometry.rect(item.rect);
     let rail_width = tab_rail::width(item, box_rect.width);
     let pane_width = (box_rect.width - rail_width).max(1.0);
     let pane_height = box_rect.height;
-    let compact = is_compact(pane_width, pane_height, item.settings, ty)
-        || pane_width < navigation_header::minimum_width(item.settings);
+    let compact = is_compact(pane_width, pane_height, settings, ty)
+        || pane_width < navigation_header::minimum_width(settings);
     let content_width = if compact {
-        pane_width.max(navigation_header::minimum_width(item.settings))
+        pane_width.max(navigation_header::minimum_width(settings))
     } else {
         pane_width
     };
-    let nav_height = navigation_header::height(content_width, item.settings, ty);
+    let nav_height = navigation_header::height(content_width, settings, ty);
     let footer_height = folder_status::height(ty);
-    let is_columns = !compact && item.settings.file_view == crate::domain::FileView::Columns;
+    let is_columns = !compact && settings.file_view == crate::domain::FileView::Columns;
     let two_columns =
         is_columns && content_width > crate::boxes::file_columns::TWO_COLUMN_MIN_WIDTH;
     let col_header = if is_columns {
@@ -362,7 +370,12 @@ fn compact_contents<'a>(
     .width(Fill)
     .height(Fill)
     .on_scroll(move |viewport| {
-        Message::FileViewportScrolled(view, viewport.absolute_offset(), viewport.bounds().height)
+        Message::FileViewportScrolled(
+            view,
+            viewport.absolute_offset(),
+            viewport.bounds().height,
+            viewport.is_user_scroll(),
+        )
     })
     .into()
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 mod configuration;
 mod editing;
 mod launchers;
+mod scroll;
 mod shape;
 mod tabs;
 pub use configuration::{BoxSetting, BoxSettings, FileView};
@@ -190,6 +191,7 @@ impl Workspace {
                 view: view.view,
                 navigation: &view.navigation,
                 settings: item.settings,
+                top_item: view.top_item,
             })
         })
     }
@@ -207,7 +209,11 @@ impl Workspace {
     }
     pub fn prune_removed_path(&mut self, source: &std::path::Path) {
         for view in self.boxes.iter_mut().flat_map(FolderBox::views_mut) {
+            let before = view.navigation.current().to_path_buf();
             view.navigation.prune_removed_path(source);
+            if view.navigation.current() != before {
+                view.top_item = 0;
+            }
         }
     }
     pub fn is_active(&self, view: ViewId) -> bool {
@@ -329,10 +335,7 @@ impl Workspace {
                             id,
                             rect,
                             settings: BoxSettings::default(),
-                            standalone: FolderView {
-                                view,
-                                navigation: Navigation::new(start),
-                            },
+                            standalone: FolderView::new(view, Navigation::new(start)),
                             tabs: None,
                         });
                         self.selected = Some(id);

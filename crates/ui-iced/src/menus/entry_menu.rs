@@ -178,6 +178,7 @@ impl Desktop {
             self.column_previews.select(view, path.clone());
             self.views.entry(view).or_default().hint = None;
         } else {
+            self.cancel_pending_scroll_restore(view);
             self.column_previews.clear_selection(view);
             let state = self.views.entry(view).or_default();
             if !state.selection.contains(&path) {

@@ -12,44 +12,52 @@ pub(crate) struct ListingCompletionContext {
     generation: u64,
     intent: NavigationIntent,
     succeeded: bool,
+    directory: Option<std::path::PathBuf>,
+    previous_folder: Option<std::path::PathBuf>,
     previous_reload: Option<(
         std::path::PathBuf,
         Vec<crate::application::contracts::directory::DirectoryEntry>,
     )>,
 }
 
-pub(crate) type BoxSnapshot = (
-    std::collections::HashMap<crate::domain::BoxId, ViewId>,
-    std::collections::HashMap<crate::domain::BoxId, crate::domain::GridRect>,
-);
+pub(crate) struct BoxSnapshot {
+    active: std::collections::HashMap<crate::domain::BoxId, ViewId>,
+    scrollers: std::collections::HashMap<
+        crate::domain::BoxId,
+        (
+            crate::boxes::folder_box::ScrollerGeometry,
+            crate::domain::BoxSettings,
+        ),
+    >,
+    typography: crate::application::preferences::typography::TypographyPreferences,
+}
 
 impl Desktop {
     pub(crate) fn snapshot_boxes_before(&self) -> BoxSnapshot {
+        let geometry = self.geometry();
         let mut active = std::collections::HashMap::new();
-        let mut rects = std::collections::HashMap::new();
+        let mut scrollers = std::collections::HashMap::new();
         for item in self.application.workspace().boxes() {
             active.insert(item.id, item.active_view().view);
-            rects.insert(item.id, item.rect);
+            scrollers.insert(
+                item.id,
+                (
+                    crate::boxes::folder_box::scroller_geometry(geometry, item),
+                    item.settings,
+                ),
+            );
         }
-        (active, rects)
+        BoxSnapshot {
+            active,
+            scrollers,
+            typography: self.application.typography(),
+        }
     }
 
-    pub(crate) fn reconcile_boxes_after(
-        &mut self,
-        (active_before, rects_before): BoxSnapshot,
-    ) -> Task<Message> {
-        let resized = self.application.workspace().boxes().iter().any(|item| {
-            rects_before
-                .get(&item.id)
-                .is_some_and(|prev| *prev != item.rect)
-        });
+    pub(crate) fn reconcile_boxes_after(&mut self, before: BoxSnapshot) -> Task<Message> {
         Task::batch([
-            self.reconcile_tab_activation(active_before),
-            if resized {
-                self.reobserve_active_scrolls()
-            } else {
-                Task::none()
-            },
+            self.reconcile_tab_activation(before.active),
+            self.rescale_box_scrollers(&before.scrollers, before.typography),
         ])
     }
 
@@ -61,28 +69,144 @@ impl Desktop {
             .iter()
             .filter_map(|item| {
                 let view = item.active_view().view;
+                self.application.load(view).and_then(LoadState::listing)?;
                 let state = self.views.get(&view)?;
-                Some(file_list::observe_scroll(view, state.listing_revision))
+                state
+                    .pending_scroll_restore
+                    .is_none()
+                    .then(|| file_list::observe_scroll(view, state.listing_revision))
             })
             .collect();
         Task::batch(tasks)
+    }
+
+    fn configure_kept_other_folder(
+        &self,
+        view: ViewId,
+        intent: NavigationIntent,
+        configured_dir: Option<&std::path::Path>,
+    ) -> bool {
+        intent == NavigationIntent::Configure
+            && configured_dir.is_some_and(|dir| {
+                self.application
+                    .workspace()
+                    .view(view)
+                    .is_some_and(|item| item.navigation.current() != dir)
+            })
+    }
+
+    fn configure_preserved_same_tab_folder(
+        &self,
+        view: ViewId,
+        intent: NavigationIntent,
+        previous_folder: Option<&std::path::Path>,
+    ) -> bool {
+        intent == NavigationIntent::Configure
+            && self
+                .application
+                .workspace()
+                .box_for_view(view)
+                .is_some_and(crate::domain::FolderBox::has_visible_tabs)
+            && previous_folder.is_some_and(|prev| {
+                self.application
+                    .workspace()
+                    .view(view)
+                    .is_some_and(|item| item.navigation.current() == prev)
+            })
+    }
+
+    pub(crate) fn will_reset_navigated_presentation(
+        &self,
+        context: Option<&ListingCompletionContext>,
+    ) -> Option<ViewId> {
+        let ctx = context?;
+        let succeeded = ctx.succeeded
+            && !(ctx.intent == NavigationIntent::Configure
+                && self.application.box_configuration_error(ctx.view).is_some());
+        (succeeded
+            && !self.configure_kept_other_folder(ctx.view, ctx.intent, ctx.directory.as_deref())
+            && !self.configure_preserved_same_tab_folder(
+                ctx.view,
+                ctx.intent,
+                ctx.previous_folder.as_deref(),
+            )
+            && !matches!(
+                ctx.intent,
+                NavigationIntent::Reload | NavigationIntent::Activate
+            )
+            && self
+                .application
+                .load(ctx.view)
+                .and_then(LoadState::listing)
+                .is_some())
+        .then_some(ctx.view)
+    }
+
+    pub(crate) fn apply_pending_scroll_restore(&mut self, view: ViewId) -> Task<Message> {
+        if !self.application.workspace().is_active(view)
+            || !self.application.is_sort_ready(view)
+            || matches!(
+                self.application.load(view),
+                Some(LoadState::Loading { intent, .. }) if *intent != NavigationIntent::Reload
+            )
+        {
+            return Task::none();
+        }
+        if !self
+            .views
+            .get(&view)
+            .is_some_and(|state| state.pending_scroll_restore.is_some())
+        {
+            return Task::none();
+        }
+        let Some(item) = self.application.workspace().box_for_view(view) else {
+            return Task::none();
+        };
+        let Some(view_ref) = self.application.workspace().view(view) else {
+            return Task::none();
+        };
+        let Some(listing) = self.application.load(view).and_then(LoadState::listing) else {
+            return Task::none();
+        };
+        let geometry = self.geometry();
+        let scroller = crate::boxes::folder_box::scroller_geometry(geometry, item);
+        let visible_count = listing.display_len(view_ref.settings.show_hidden);
+        let Some(presentation) = self.views.get_mut(&view) else {
+            return Task::none();
+        };
+        let Some(top_item) = presentation.pending_scroll_restore.take() else {
+            return Task::none();
+        };
+        let y = crate::boxes::scroll_position::top_item_to_offset(
+            top_item.get(),
+            scroller,
+            view_ref.settings.file_view,
+            visible_count,
+            geometry.typography,
+        );
+        presentation.scroll = file_list::ScrollWindow {
+            offset: y,
+            height: scroller.viewport_height,
+        };
+        presentation.scroll_x = 0.0;
+        let generation = presentation.listing_revision;
+        self.sync_view_top_item(view);
+        operation::scroll_to(
+            file_list::scroll_id(view),
+            operation::AbsoluteOffset { x: 0.0, y },
+        )
+        .chain(file_list::observe_scroll(view, generation))
     }
 
     pub(crate) fn complete_listing_task(
         &mut self,
         context: Option<ListingCompletionContext>,
     ) -> Task<Message> {
-        context.map_or_else(Task::none, |ctx| {
-            let succeeded = ctx.succeeded
+        context.map_or_else(Task::none, |mut ctx| {
+            ctx.succeeded = ctx.succeeded
                 && !(ctx.intent == crate::domain::NavigationIntent::Configure
                     && self.application.box_configuration_error(ctx.view).is_some());
-            self.completed_listing(
-                ctx.view,
-                ctx.generation,
-                ctx.intent,
-                succeeded,
-                ctx.previous_reload,
-            )
+            self.completed_listing(ctx)
         })
     }
     pub(crate) fn listing_message(&mut self, message: Message) -> Task<Message> {
@@ -100,11 +224,12 @@ impl Desktop {
                 state.reveal_after_motion = false;
                 state.earlier_ancestors = false;
                 state.selection_anchor = None;
+                self.cancel_pending_scroll_restore(view);
                 self.activate_view(view);
                 self.focus_canvas()
             }
-            Message::FileViewportScrolled(view, offset, height) => {
-                self.record_file_scroll(view, offset, height)
+            Message::FileViewportScrolled(view, offset, height, user_scrolled) => {
+                self.record_file_scroll(view, offset, height, user_scrolled)
             }
             Message::ListingScrollObserved {
                 view,
@@ -123,11 +248,30 @@ impl Desktop {
         generation: u64,
         window: file_list::ScrollWindow,
     ) -> Task<Message> {
-        if let Some(presentation) = self.views.get_mut(&view)
+        if self
+            .application
+            .load(view)
+            .and_then(LoadState::listing)
+            .is_none()
+        {
+            return Task::none();
+        }
+        let updated = if let Some(presentation) = self.views.get_mut(&view)
             && presentation.listing_revision == generation
             && self.application.workspace().is_active(view)
         {
-            presentation.scroll = window;
+            if presentation.pending_scroll_restore.is_some() {
+                presentation.scroll.height = window.height;
+                false
+            } else {
+                presentation.scroll = window;
+                true
+            }
+        } else {
+            false
+        };
+        if updated {
+            self.sync_view_top_item(view);
         }
         Task::none()
     }
@@ -137,14 +281,36 @@ impl Desktop {
         view: ViewId,
         offset: iced::widget::scrollable::AbsoluteOffset,
         height: f32,
+        user_scrolled: bool,
     ) -> Task<Message> {
-        if self.workspace_input_enabled() && self.application.workspace().can_browse(view) {
-            let state = self.views.entry(view).or_default();
+        if !self.workspace_input_enabled()
+            || !self.application.workspace().can_browse(view)
+            || self
+                .application
+                .load(view)
+                .and_then(LoadState::listing)
+                .is_none()
+        {
+            return Task::none();
+        }
+        let state = self.views.entry(view).or_default();
+        if user_scrolled {
+            state.pending_scroll_restore = None;
             state.scroll_x = offset.x;
             state.scroll = file_list::ScrollWindow {
                 offset: offset.y,
                 height,
             };
+            self.sync_view_top_item(view);
+        } else if state.pending_scroll_restore.is_some() {
+            state.scroll.height = height;
+        } else {
+            state.scroll_x = offset.x;
+            state.scroll = file_list::ScrollWindow {
+                offset: offset.y,
+                height,
+            };
+            self.sync_view_top_item(view);
         }
         Task::none()
     }
@@ -183,6 +349,16 @@ impl Desktop {
                     generation: completion.request.generation,
                     intent: *intent,
                     succeeded,
+                    directory: completion
+                        .result
+                        .as_ref()
+                        .ok()
+                        .map(|listing| listing.directory.clone()),
+                    previous_folder: self
+                        .application
+                        .workspace()
+                        .view(completion.request.view)
+                        .map(|item| item.navigation.current().to_path_buf()),
                     previous_reload,
                 })
             }
@@ -286,83 +462,123 @@ impl Desktop {
         }
     }
 
-    pub(crate) fn completed_listing(
+    fn finish_configure_other_folder(
         &mut self,
         view: ViewId,
         generation: u64,
         intent: NavigationIntent,
         succeeded: bool,
-        previous_reload: Option<(
-            std::path::PathBuf,
-            Vec<crate::application::contracts::directory::DirectoryEntry>,
-        )>,
-    ) -> Task<Message> {
-        if intent == NavigationIntent::Configure {
-            self.completed_box_folder(view, generation, succeeded);
+        configured_dir: Option<&std::path::Path>,
+    ) -> bool {
+        if intent != NavigationIntent::Configure {
+            return false;
         }
+        self.completed_box_folder(view, generation, succeeded);
+        if succeeded && self.configure_kept_other_folder(view, intent, configured_dir) {
+            if let Some(presentation) = self.views.get_mut(&view) {
+                presentation.submitted_revision = None;
+            }
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn completed_listing(&mut self, ctx: ListingCompletionContext) -> Task<Message> {
+        let ListingCompletionContext {
+            view,
+            generation,
+            intent,
+            succeeded,
+            directory: configured_dir,
+            previous_folder,
+            previous_reload,
+        } = ctx;
+        if self.finish_configure_other_folder(
+            view,
+            generation,
+            intent,
+            succeeded,
+            configured_dir.as_deref(),
+        ) {
+            return Task::none();
+        }
+        let preserved_tab_folder =
+            self.configure_preserved_same_tab_folder(view, intent, previous_folder.as_deref());
+        let in_place = matches!(
+            intent,
+            NavigationIntent::Reload | NavigationIntent::Activate
+        ) || preserved_tab_folder;
         let show_hidden = self
             .application
             .workspace()
             .view(view)
             .is_some_and(|item| item.settings.show_hidden);
         let reveal_target = self.reload_reveal_target(view);
-        let presentation = self.views.entry(view).or_default();
-        let unchanged_draft =
-            presentation.submitted_revision == Some((generation, presentation.draft_revision));
+        let sort_indices = self.application.sort_indices(view);
+        let listing_after = self.application.load(view).and_then(LoadState::listing);
         let mut task = Task::none();
         let mut reloaded_dir = None;
-        // Application admission may already have started the pending catch-up.
-        // Its retained listing is still the result we must reconcile now.
-        match self.application.load(view).and_then(LoadState::listing) {
-            Some(listing) if succeeded => {
-                record_reload_motion(
-                    intent,
-                    previous_reload,
-                    listing,
-                    self.application.sort_indices(view),
-                    show_hidden,
-                    presentation,
-                );
-                if matches!(
-                    intent,
-                    NavigationIntent::Reload | NavigationIntent::Activate
-                ) {
-                    if intent == NavigationIntent::Reload {
-                        reloaded_dir = Some(listing.directory.clone());
+        let mut did_reset_scroll = false;
+        {
+            let presentation = self.views.entry(view).or_default();
+            let unchanged_draft =
+                presentation.submitted_revision == Some((generation, presentation.draft_revision));
+            // Application admission may already have started the pending catch-up.
+            // Its retained listing is still the result we must reconcile now.
+            match listing_after {
+                Some(listing) if succeeded => {
+                    record_reload_motion(
+                        intent,
+                        previous_reload,
+                        listing,
+                        sort_indices,
+                        show_hidden,
+                        presentation,
+                    );
+                    if in_place {
+                        if intent == NavigationIntent::Reload || preserved_tab_folder {
+                            reloaded_dir = Some(listing.directory.clone());
+                        }
+                        if preserved_tab_folder {
+                            presentation.draft = None;
+                            presentation.invalid = false;
+                        }
+                        task = reconcile_reload_listing(
+                            view,
+                            generation,
+                            if preserved_tab_folder {
+                                NavigationIntent::Reload
+                            } else {
+                                intent
+                            },
+                            show_hidden,
+                            reveal_target,
+                            listing,
+                            presentation,
+                        );
+                    } else {
+                        task = reset_navigated_presentation(
+                            view,
+                            intent,
+                            unchanged_draft,
+                            show_hidden,
+                            listing,
+                            presentation,
+                        );
+                        did_reset_scroll = intent != NavigationIntent::Restore;
                     }
-                    task = reconcile_reload_listing(
-                        view,
-                        generation,
-                        intent,
-                        show_hidden,
-                        reveal_target,
-                        listing,
-                        presentation,
-                    );
-                } else {
-                    task = reset_navigated_presentation(
-                        view,
-                        intent,
-                        unchanged_draft,
-                        show_hidden,
-                        listing,
-                        presentation,
-                    );
+                    presentation.listing_revision = generation;
                 }
-                presentation.listing_revision = generation;
+                _ if !succeeded && !in_place && intent != NavigationIntent::Configure => {
+                    presentation.invalid = unchanged_draft && presentation.draft.is_some();
+                }
+                _ => {}
             }
-            _ if !succeeded
-                && !matches!(
-                    intent,
-                    NavigationIntent::Reload | NavigationIntent::Activate
-                )
-                && intent != NavigationIntent::Configure =>
-            {
-                presentation.invalid = unchanged_draft && presentation.draft.is_some();
-            }
-            _ => {}
+            presentation.submitted_revision = None;
         }
-        presentation.submitted_revision = None;
+        if did_reset_scroll {
+            self.sync_view_top_item(view);
+        }
         if let Some(dir) = reloaded_dir {
             self.column_previews.invalidate_directory(&dir);
         }
@@ -382,6 +598,9 @@ fn reset_navigated_presentation(
     let column_focus = presentation.column_focus.take();
     if unchanged_draft || intent == NavigationIntent::Configure {
         presentation.draft = None;
+    }
+    if intent != NavigationIntent::Restore {
+        presentation.pending_scroll_restore = None;
     }
     presentation.invalid = false;
     presentation.selected = None;
@@ -502,6 +721,7 @@ fn reconcile_reload_listing(
         None
     };
     if let Some(y) = reveal_y {
+        presentation.pending_scroll_restore = None;
         presentation.scroll.offset = y;
         operation::scroll_to(
             file_list::scroll_id(view),
@@ -511,6 +731,15 @@ fn reconcile_reload_listing(
             },
         )
         .chain(file_list::observe_scroll(view, generation))
+    } else if presentation.pending_scroll_restore.is_some() {
+        if intent == NavigationIntent::Activate {
+            operation::scroll_to(
+                file_list::scroll_id(view),
+                operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+            )
+        } else {
+            Task::none()
+        }
     } else if intent == NavigationIntent::Activate {
         operation::scroll_to(
             file_list::scroll_id(view),

@@ -350,7 +350,7 @@ impl Application {
         {
             return Some(vec![]);
         }
-        if result.is_err() || !self.workspace.same_durable_state(&pending.baseline) {
+        if result.is_err() || !self.workspace.same_proposal_baseline(&pending.baseline) {
             self.scope_error = Some((pending.view, "Cannot accept scope change: validation failed, the saved-size limit was exceeded, or the workspace changed. Keep the current scope and retry.".into()));
             return Some(vec![]);
         }

@@ -491,6 +491,7 @@ impl Desktop {
             return Task::none();
         };
         let presentation = self.views.entry(view).or_default();
+        presentation.pending_scroll_restore = None;
         presentation.pending_selection.clear();
         presentation.reveal_selected = false;
         presentation.reveal_after_motion = bounds.has_motion;
@@ -511,6 +512,7 @@ impl Desktop {
             height: bounds.viewport_height,
         };
         let generation = presentation.listing_revision;
+        self.sync_view_top_item(view);
         self.column_previews.clear_selection(view);
         if self.column_previews.is_focused(view) {
             self.column_previews.set_focused(None);
@@ -553,6 +555,7 @@ impl Desktop {
             return Task::none();
         };
         let presentation = self.views.entry(view).or_default();
+        presentation.pending_scroll_restore = None;
         let next_offset = file_list::reveal_scroll_offset(
             presentation.scroll.offset,
             bounds.viewport_height,
@@ -565,6 +568,7 @@ impl Desktop {
             height: bounds.viewport_height,
         };
         let generation = presentation.listing_revision;
+        self.sync_view_top_item(view);
         file_list::reveal_scroll(view, generation, bounds.top, bounds.bottom)
     }
 
@@ -693,7 +697,10 @@ impl Desktop {
                     self.jump_to_entry(view, path, display_index),
                 )
             }
-            _ => (proposed, false, 0, Task::none()),
+            _ => {
+                self.cancel_pending_scroll_restore(view);
+                (proposed, false, 0, Task::none())
+            }
         };
         self.record_jump_session(target, query, cycled, match_count, now);
         task

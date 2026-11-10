@@ -104,7 +104,11 @@ impl Application {
             .active_views()
             .filter_map(|item| {
                 let changed = before.get(&item.view) != Some(&item.navigation);
-                (changed || !self.loads.contains_key(&item.view)).then_some((item.view, !changed))
+                let same_folder = before
+                    .get(&item.view)
+                    .is_some_and(|prev| prev.current() == item.navigation.current());
+                (changed || !self.loads.contains_key(&item.view))
+                    .then_some((item.view, same_folder))
             })
             .collect();
         for (view, activation) in reloads {

@@ -6,6 +6,17 @@ use super::{BoxId, BoxSettings, FolderBox, Mode, Navigation, ViewId, Workspace};
 pub struct FolderView {
     pub view: ViewId,
     pub navigation: Navigation,
+    pub top_item: u32,
+}
+
+impl FolderView {
+    pub const fn new(view: ViewId, navigation: Navigation) -> Self {
+        Self {
+            view,
+            navigation,
+            top_item: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -14,13 +25,14 @@ pub struct ViewRef<'a> {
     pub view: ViewId,
     pub navigation: &'a Navigation,
     pub settings: BoxSettings,
+    pub top_item: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tabs {
-    views: Vec<FolderView>,
-    active: usize,
-    visible: bool,
+    pub(super) views: Vec<FolderView>,
+    pub(super) active: usize,
+    pub(super) visible: bool,
 }
 
 impl Tabs {
@@ -62,7 +74,11 @@ impl FolderBox {
     }
     pub(super) fn configure_default_folder(&mut self, path: std::path::PathBuf) {
         let old_default = self.standalone.navigation.start().to_path_buf();
+        let standalone_prev = self.standalone.navigation.current().to_path_buf();
         self.standalone.navigation = Navigation::new(path.clone());
+        if self.standalone.navigation.current() != standalone_prev {
+            self.standalone.top_item = 0;
+        }
         if let Some(tabs) = &mut self.tabs {
             for tab in &mut tabs.views {
                 let untouched_at_old_default = tab.navigation.current() == old_default
@@ -70,7 +86,11 @@ impl FolderBox {
                     && tab.navigation.forward_history().is_empty()
                     && tab.navigation.scope().kind() == crate::domain::ScopeKind::Free;
                 if untouched_at_old_default {
+                    let prev_current = tab.navigation.current().to_path_buf();
                     tab.navigation = Navigation::new(path.clone());
+                    if tab.navigation.current() != prev_current {
+                        tab.top_item = 0;
+                    }
                 } else {
                     tab.navigation.set_default_start(path.clone());
                 }
@@ -223,10 +243,8 @@ impl Workspace {
                     .checked_add(1)
                     .ok_or("view identities are exhausted")?;
                 let navigation = Navigation::new(default_start);
-                tabs.views.push(FolderView {
-                    view: ViewId(*identity),
-                    navigation,
-                });
+                tabs.views
+                    .push(FolderView::new(ViewId(*identity), navigation));
                 tabs.active = tabs.views.len() - 1;
                 Ok(true)
             }
@@ -290,8 +308,9 @@ impl Workspace {
     }
 
     /// Only the application may accept a current, budget-checked proposal.
-    pub(crate) fn accept_tab_proposal(&mut self, proposal: Self) {
+    pub(crate) fn accept_tab_proposal(&mut self, mut proposal: Self) {
         self.remember();
+        super::scroll::carry_proposal_scroll(&self.boxes, &mut proposal.boxes);
         self.boxes = proposal.boxes;
         self.next_identity = proposal.next_identity;
         self.gesture = None;

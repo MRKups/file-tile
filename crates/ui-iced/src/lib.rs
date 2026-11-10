@@ -136,7 +136,7 @@ enum Message {
     ViewportLaidOut(Size),
     WindowAppearanceObserved(window_appearance::Capability),
     SystemThemeChanged(iced::theme::Mode),
-    FileViewportScrolled(ViewId, iced::widget::scrollable::AbsoluteOffset, f32),
+    FileViewportScrolled(ViewId, iced::widget::scrollable::AbsoluteOffset, f32, bool),
     ListingScrollObserved {
         view: ViewId,
         generation: u64,
@@ -210,6 +210,7 @@ struct ViewPresentation {
     hint: Option<String>,
     scroll: file_list::ScrollWindow,
     scroll_x: f32,
+    pending_scroll_restore: Option<std::num::NonZeroU32>,
     listing_revision: u64,
     earlier_ancestors: bool,
     column_focus: Option<boxes::file_columns::ColumnFocus>,
@@ -327,7 +328,7 @@ impl Default for Desktop {
 
 impl Desktop {
     fn new(application: Application, directory: DirectoryBackend) -> Self {
-        Self {
+        let mut desktop = Self {
             launchers: launchers::Runtime::default(),
             logs: diagnostics_dialog::Logs::default(),
             updates: updates::Updates::default(),
@@ -385,7 +386,9 @@ impl Desktop {
             edit_anchor: None,
             folder_watcher: None,
             watch_listener: None,
-        }
+        };
+        desktop.seed_missing_view_presentations();
+        desktop
     }
 }
 
@@ -490,7 +493,12 @@ impl Desktop {
             menu.tick(now);
         }
         let mut reveal_views = Vec::new();
+        let mut settled_scroll_views = Vec::new();
         for (&view, state) in &mut self.views {
+            let had_layout_motion = state
+                .motion
+                .as_ref()
+                .is_some_and(boxes::entry_motion::ViewMotion::has_layout_motion);
             if state
                 .motion
                 .as_mut()
@@ -498,25 +506,34 @@ impl Desktop {
             {
                 state.motion = None;
             }
-            if state.reveal_after_motion
-                && state
-                    .motion
-                    .as_ref()
-                    .is_none_or(|motion| !motion.has_layout_motion())
-            {
+            let has_layout_motion = state
+                .motion
+                .as_ref()
+                .is_some_and(boxes::entry_motion::ViewMotion::has_layout_motion);
+            if had_layout_motion && !has_layout_motion && state.pending_scroll_restore.is_none() {
+                settled_scroll_views.push((view, state.listing_revision));
+            }
+            if state.reveal_after_motion && !has_layout_motion {
                 state.reveal_after_motion = false;
                 reveal_views.push(view);
             }
         }
-        if reveal_views.is_empty() {
-            Task::none()
-        } else {
-            Task::batch(
-                reveal_views
-                    .into_iter()
-                    .map(|view| self.reveal_selected_entry(view)),
-            )
+        let mut tasks = Vec::new();
+        for (view, revision) in settled_scroll_views {
+            if self.application.workspace().is_active(view)
+                && self
+                    .application
+                    .load(view)
+                    .and_then(LoadState::listing)
+                    .is_some()
+            {
+                tasks.push(file_list::observe_scroll(view, revision));
+            }
         }
+        for view in reveal_views {
+            tasks.push(self.reveal_selected_entry(view));
+        }
+        Task::batch(tasks)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -782,7 +799,7 @@ impl Desktop {
         let epoch_before = self.application.workspace_epoch();
         let boxes_before = self.snapshot_boxes_before();
         let settings_before = self.visibility_before(&action);
-        let undo_before = self.undo_views_before(&action);
+        let folders_before = self.view_folders();
         let restored = matches!((&action, self.application.persistence()),
             (Action::StorageCompleted(crate::application::contracts::storage::StorageCompletion::Loaded { session, .. }),
             crate::application::contracts::storage::PersistenceState::Loading(current)) if session == current);
@@ -807,7 +824,7 @@ impl Desktop {
         if switched {
             self.clear_workspace_context();
         }
-        self.sync_editing_views(undo_before);
+        let skip_reset = self.will_reset_navigated_presentation(completed_view.as_ref());
         let (recovery_opened, modal_effects) = self.reconcile_runtime_context(
             restored,
             closing,
@@ -815,46 +832,33 @@ impl Desktop {
             recovery_visible_before,
         );
         effects.extend(modal_effects);
+        let relocation_task =
+            self.sync_editing_views(&folders_before, skip_reset, restored || switched);
+        self.seed_missing_view_presentations();
         let mut task = self.complete_listing_task(completed_view);
+        let sort_restore = self.apply_pending_active_restores();
         self.sync_box_settings();
         self.sync_launchers();
         self.reconcile_context_menus();
         let type_jump = self.reconcile_type_jump();
         task = Task::batch([
             task,
+            relocation_task,
+            sort_restore,
             type_jump,
             self.reconcile_box_settings(settings_before),
             self.effects(effects),
         ]);
-        if restored {
-            task = Task::batch([task, self.restore_window_if_ready()]);
-        }
-        if let Some(view) = typed_view
-            && matches!(self.application.load(view), Some(LoadState::Failed { .. }))
-        {
-            self.views.entry(view).or_default().invalid = true;
-        }
-        if switched {
-            task = Task::batch([
-                task,
-                if self.workspace_management.is_some() {
-                    operation::focus("workspace-management-cancel")
-                } else {
-                    operation::focus("workspace-canvas")
-                },
-            ]);
-        }
-        if clear_focus {
-            task = Task::batch([task, self.focus_canvas()]);
-        }
-        if recovery_opened {
-            task = Task::batch([
-                task,
-                storage_dialog::focus_initial(&self.application, self.startup_confirmation),
-            ]);
-        }
+        let post_focus = self.finish_dispatch_focus(
+            restored,
+            switched,
+            clear_focus,
+            recovery_opened,
+            typed_view,
+        );
         Task::batch([
             task,
+            post_focus,
             self.restore_box_form(),
             self.fill_thumbnails(),
             if restored || switched {
@@ -863,6 +867,42 @@ impl Desktop {
                 self.reconcile_boxes_after(boxes_before)
             },
         ])
+    }
+
+    fn finish_dispatch_focus(
+        &mut self,
+        restored: bool,
+        switched: bool,
+        clear_focus: bool,
+        recovery_opened: bool,
+        typed_view: Option<ViewId>,
+    ) -> Task<Message> {
+        let mut tasks = Vec::new();
+        if restored {
+            tasks.push(self.restore_window_if_ready());
+        }
+        if let Some(view) = typed_view
+            && matches!(self.application.load(view), Some(LoadState::Failed { .. }))
+        {
+            self.views.entry(view).or_default().invalid = true;
+        }
+        if switched {
+            tasks.push(if self.workspace_management.is_some() {
+                operation::focus("workspace-management-cancel")
+            } else {
+                operation::focus("workspace-canvas")
+            });
+        }
+        if clear_focus {
+            tasks.push(self.focus_canvas());
+        }
+        if recovery_opened {
+            tasks.push(storage_dialog::focus_initial(
+                &self.application,
+                self.startup_confirmation,
+            ));
+        }
+        Task::batch(tasks)
     }
 
     fn clear_workspace_context(&mut self) {

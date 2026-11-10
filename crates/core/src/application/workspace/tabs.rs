@@ -121,7 +121,7 @@ impl Application {
         {
             return Vec::new();
         }
-        if !self.workspace.same_durable_state(&pending.baseline) {
+        if !self.workspace.same_proposal_baseline(&pending.baseline) {
             self.tab_error = Some((
                 pending.id,
                 "Tab change cancelled because the workspace changed. Try again.".into(),

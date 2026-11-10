@@ -24,8 +24,13 @@ impl Workspace {
             return None;
         }
         let mut proposal = self.snapshot();
-        proposal.view_mut(view)?.navigation.set_scope(scope);
-        (!proposal.same_durable_state(self)).then_some(proposal)
+        let item = proposal.view_mut(view)?;
+        let before_current = item.navigation.current().to_path_buf();
+        item.navigation.set_scope(scope);
+        if item.navigation.current() != before_current {
+            item.top_item = 0;
+        }
+        (!proposal.same_proposal_baseline(self)).then_some(proposal)
     }
     pub const UNDO_LIMIT: usize = 50;
 
@@ -53,13 +58,14 @@ impl Workspace {
         if self.gesture.take().is_some() {
             return UndoOutcome::CancelledGesture;
         }
-        let Some((boxes, launchers)) = self
+        let Some((mut boxes, launchers)) = self
             .undo
             .as_mut()
             .and_then(|history| history.snapshots.pop())
         else {
             return UndoOutcome::Empty;
         };
+        scroll::carry_live_scroll(&self.boxes, &mut boxes);
         self.boxes = boxes;
         self.launchers = launchers;
         self.selected = None;
@@ -99,13 +105,14 @@ impl Workspace {
         if navigation == before {
             return false;
         }
-        if matches!(
+        let resets_scroll = matches!(
             intent,
             NavigationIntent::Open
                 | NavigationIntent::Back
                 | NavigationIntent::Forward
                 | NavigationIntent::Configure
-        ) {
+        );
+        if resets_scroll {
             self.remember();
         }
         if intent == NavigationIntent::Initialize
@@ -126,6 +133,9 @@ impl Workspace {
         }
         if let Some(item) = self.view_mut(view) {
             item.navigation = navigation;
+            if resets_scroll {
+                item.top_item = 0;
+            }
         }
         true
     }

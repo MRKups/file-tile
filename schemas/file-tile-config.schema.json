@@ -329,7 +329,8 @@
         "starting_folder": { "$ref": "#/$defs/path" },
         "current_folder": { "$ref": "#/$defs/path" },
         "scope": { "$ref": "#/$defs/scope" },
-        "history": { "$ref": "#/$defs/history" }
+        "history": { "$ref": "#/$defs/history" },
+        "top_item": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       },
       "required": ["id", "starting_folder", "current_folder", "scope", "history"],
       "additionalProperties": false

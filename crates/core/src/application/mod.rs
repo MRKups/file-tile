@@ -20,7 +20,7 @@ use contracts::{
     configuration::{self, AppPreferences, WorkspaceIndex},
     directory::{self, DirectoryListing, ListingCompletion, ListingRequest},
     storage::{
-        self, PersistenceState, SaveRequest, SaveTag, SessionId, StartupOperation,
+        self, CloseStage, PersistenceState, SaveRequest, SaveTag, SessionId, StartupOperation,
         StorageCompletion,
     },
     watching,
@@ -34,6 +34,7 @@ pub enum Action {
     FolderUsageCompleted(folder_usage::UsageCompletion),
     SetSort(ViewId, crate::domain::sorting::SortSettings),
     SortCompleted(sorting::SortCompletion),
+    SyncViewScroll(ViewId, u32),
     StartFileOperation {
         view: ViewId,
         directory: PathBuf,
@@ -361,6 +362,20 @@ impl Application {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        if let Action::SyncViewScroll(view, top_item) = action {
+            if self.accepts_edits()
+                && matches!(
+                    self.persistence,
+                    PersistenceState::Ready {
+                        closing: CloseStage::Open,
+                        ..
+                    } | PersistenceState::Off
+                )
+            {
+                self.workspace.set_view_top_item(view, top_item);
+            }
+            return Vec::new();
+        }
         let sync = matches!(
             action,
             Action::FinishDraw
@@ -480,7 +495,9 @@ impl Application {
                     return self.save_effect(true);
                 }
             }
-            Action::SortCompleted(_) | Action::FolderUsageCompleted(_) => {}
+            Action::SortCompleted(_)
+            | Action::FolderUsageCompleted(_)
+            | Action::SyncViewScroll(..) => {}
             Action::ChangeTabs(id, command) => return self.change_tabs(id, command),
             Action::StartFileOperation { .. }
             | Action::FileOperationCompleted(_)

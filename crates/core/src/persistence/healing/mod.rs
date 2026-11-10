@@ -6,6 +6,7 @@
 
 pub(super) mod orphaned_temps;
 pub(super) mod preferences_fields;
+pub(super) mod view_fields;
 pub(super) mod workspace_fallback;
 
 /// Named storage self-healing scenarios recognized on startup or decode.
@@ -20,6 +21,9 @@ pub enum ConfigHealingScenario {
     /// Invalid field in `safety` block in `preferences.json` reset to safe
     /// defaults without locking workspace autosave.
     MalformedSafetyPreferences,
+    /// Invalid `top_item` field on a view record in `workspace-<UUID>.json`
+    /// reset to `0` without locking workspace autosave.
+    MalformedViewTopItem,
     /// Referenced active `workspace-<UUID>.json` was deleted on disk while
     /// another valid workspace exists in `workspaces.json`.
     MissingActiveWorkspaceFallback,
@@ -35,6 +39,7 @@ impl ConfigHealingScenario {
             Self::OrphanedTemporaryFiles => "orphaned_temporary_files",
             Self::MalformedCapabilitiesPreferences => "malformed_capabilities_preferences",
             Self::MalformedSafetyPreferences => "malformed_safety_preferences",
+            Self::MalformedViewTopItem => "malformed_view_top_item",
             Self::MissingActiveWorkspaceFallback => "missing_active_workspace_fallback",
             Self::EmptyWorkspaceRecreation => "empty_workspace_recreation",
         }

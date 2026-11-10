@@ -17,7 +17,8 @@
         "history": {
           "back": [{ "encoding": "utf8", "value": "/fixture" }],
           "forward": []
-        }
+        },
+        "top_item": 0
       }
     }
   ],

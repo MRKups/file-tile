@@ -338,10 +338,7 @@ fn encoder_rejects_invalid_domain_mutation_and_excessive_aggregate_output()
                 width: 1,
                 height: 1,
             },
-            standalone: crate::domain::FolderView {
-                view: ViewId(number),
-                navigation: nav,
-            },
+            standalone: crate::domain::FolderView::new(ViewId(number), nav),
             tabs: None,
             settings: crate::domain::BoxSettings::default(),
         })?;

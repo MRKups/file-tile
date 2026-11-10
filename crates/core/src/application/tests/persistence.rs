@@ -21,16 +21,16 @@ pub(in crate::application) fn saved_workspace(count: usize) -> Workspace {
                 width: 1,
                 height: 1,
             },
-            standalone: crate::domain::FolderView {
-                view: ViewId(identity),
-                navigation: Navigation::restore(
+            standalone: crate::domain::FolderView::new(
+                ViewId(identity),
+                Navigation::restore(
                     "/fixture/start".into(),
                     "/fixture/current".into(),
                     VecDeque::from(["/fixture/previous".into()]),
                     VecDeque::from(["/fixture/next".into()]),
                 )
                 .unwrap_or_else(|| Navigation::new("/fixture".into())),
-            },
+            ),
             tabs: None,
             settings: crate::domain::BoxSettings::default(),
         };

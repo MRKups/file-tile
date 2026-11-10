@@ -41,6 +41,7 @@ impl crate::Desktop {
         {
             return iced::Task::none();
         }
+        self.cancel_pending_scroll_restore(view);
         let range = if self.modifiers.shift() {
             let anchor = self
                 .views

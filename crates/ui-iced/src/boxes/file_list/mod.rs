@@ -52,13 +52,19 @@ impl Operation<ScrollWindow> for ScrollSnapshot {
         &mut self,
         id: Option<&Id>,
         bounds: Rectangle,
-        _content: Rectangle,
+        content: Rectangle,
         translation: Vector,
-        _state: &mut dyn Scrollable,
+        state: &mut dyn Scrollable,
     ) {
         if id == Some(&self.id) {
+            let max_y = (content.height - bounds.height).max(0.0);
+            let clamped_y = translation.y.clamp(0.0, max_y);
+            state.scroll_to(iced::widget::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(clamped_y),
+            });
             self.window = Some(ScrollWindow {
-                offset: translation.y,
+                offset: clamped_y,
                 height: bounds.height,
             });
         }
@@ -270,6 +276,7 @@ pub fn view(props: Props<'_>) -> Element<'_, Message> {
                 props.view,
                 viewport.absolute_offset(),
                 viewport.bounds().height,
+                viewport.is_user_scroll(),
             )
         })
         .into();

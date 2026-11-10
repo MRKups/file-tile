@@ -69,6 +69,7 @@ impl Desktop {
             self.column_previews.clear_selection(view);
             self.views.entry(view).or_default().hint = None;
         } else {
+            self.cancel_pending_scroll_restore(view);
             let state = self.views.entry(view).or_default();
             state.selected = None;
             state.selection.clear();

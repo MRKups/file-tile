@@ -47,6 +47,7 @@ impl Desktop {
         let kind = self.visible_entry(view, &path).map(|entry| entry.kind);
         if kind.is_some() {
             self.type_jump.dismiss_session();
+            self.cancel_pending_scroll_restore(view);
             self.activate_view(view);
         }
         match kind {

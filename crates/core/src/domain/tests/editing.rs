@@ -17,10 +17,10 @@ fn workspace(rectangles: &[GridRect]) -> Workspace {
                 .restore_box(FolderBox {
                     id: BoxId(id),
                     rect: *rect,
-                    standalone: FolderView {
-                        view: ViewId(id),
-                        navigation: Navigation::new(format!("/fixture/{id}").into())
-                    },
+                    standalone: FolderView::new(
+                        ViewId(id),
+                        Navigation::new(format!("/fixture/{id}").into()),
+                    ),
                     tabs: None,
                     settings: BoxSettings::default(),
                 })
@@ -58,16 +58,16 @@ fn removal_undo_restores_complete_state_and_keeps_identity_allocation_monotonic(
     .ok_or("Invalid standalone history fixture")?;
     let mut tabs = Vec::new();
     for (id, name) in [(3, "first"), (4, "second")] {
-        tabs.push(FolderView {
-            view: ViewId(id),
-            navigation: Navigation::restore(
+        tabs.push(FolderView::new(
+            ViewId(id),
+            Navigation::restore(
                 format!("/fixture/{name}/start").into(),
                 format!("/fixture/{name}/current").into(),
                 [format!("/fixture/{name}/back").into()].into(),
                 [format!("/fixture/{name}/forward").into()].into(),
             )
             .ok_or("Invalid retained-tab history fixture")?,
-        });
+        ));
     }
     removed.tabs = Some(Tabs::restore(tabs, ViewId(4), false)?);
     let mut workspace = Workspace::default();

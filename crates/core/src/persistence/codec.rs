@@ -418,6 +418,15 @@ struct ViewRecord {
     current_folder: PathRecord,
     scope: Value,
     history: HistoryRecord,
+    #[serde(default, deserialize_with = "deserialize_present_value")]
+    top_item: Option<Value>,
+}
+
+fn deserialize_present_value<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -509,9 +518,11 @@ fn restore_view(
     let navigation = Navigation::restore(start, current, back, forward)
         .ok_or("navigation history exceeds its limit")?
         .with_scope(scope);
+    let (top_item, _top_item_healed) = super::healing::view_fields::restore_top_item(view.top_item);
     Ok(FolderView {
         view: ViewId(view.id),
         navigation,
+        top_item,
     })
 }
 
@@ -739,6 +750,7 @@ impl Serialize for ViewRef<'_> {
             current_folder: PathRef<'a>,
             scope: super::scope::ScopeRef<'a>,
             history: History<'a>,
+            top_item: u32,
         }
         let item = self.0;
         View {
@@ -750,6 +762,7 @@ impl Serialize for ViewRef<'_> {
                 back: Paths(item.navigation.back_history()),
                 forward: Paths(item.navigation.forward_history()),
             },
+            top_item: item.top_item,
         }
         .serialize(serializer)
     }
