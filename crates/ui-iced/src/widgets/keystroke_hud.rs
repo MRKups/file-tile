@@ -6,7 +6,7 @@ use iced::advanced::{
     Clipboard, Layout, Shell, Widget, layout, overlay, renderer,
     widget::{Operation, Tree},
 };
-use iced::widget::{Stack, container, pin, row, space, text};
+use iced::widget::{container, pin, row, space, text};
 use iced::{
     Alignment, Border, Color, Element, Event, Font, Length, Padding, Rectangle, Renderer, Shadow,
     Size, Theme, Vector, font, mouse, window,
@@ -70,23 +70,14 @@ pub(crate) fn render<'a>(props: Option<Props<'a>>) -> Element<'a, Message> {
     if props.query.is_empty() || fade <= 0.001 {
         return space().into();
     }
-    let hud_layer = place_card(&props, fade);
-    let content = if let Some(glow_clip) = props.glow_clip
-        && !props.matched_boxes.is_empty()
-    {
-        let highlights = build_box_highlights(glow_clip, &props.matched_boxes, fade, props.palette);
-        Stack::new()
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .push(highlights)
-            .push(hud_layer)
-            .into()
-    } else {
-        hud_layer
-    };
+    let content = place_card(&props, fade);
 
     Element::new(PassiveHud {
         content,
+        glow_clip: props.glow_clip,
+        matched_boxes: props.matched_boxes,
+        fade,
+        accent: props.palette.accent,
         fade_start: props.fade_start,
         fading: props.fading,
         on_fade_start: props.on_fade_start,
@@ -135,46 +126,6 @@ fn place_card<'a>(props: &Props<'a>, fade: f32) -> Element<'a, Message> {
             .into()
         }
     }
-}
-
-fn build_box_highlights<'a>(
-    glow_clip: Rectangle,
-    matched_boxes: &[Rectangle],
-    fade: f32,
-    palette: a::Palette,
-) -> Element<'a, Message> {
-    let mut stack = Stack::new().width(Length::Fill).height(Length::Fill);
-    for &rect in matched_boxes {
-        let highlight = container(space())
-            .width(rect.width)
-            .height(rect.height)
-            .style(move |_| container::Style {
-                background: Some(palette.accent.scale_alpha(0.055 * fade).into()),
-                border: Border {
-                    color: palette.accent.scale_alpha(0.72 * fade),
-                    width: 1.5,
-                    radius: 10.0.into(),
-                },
-                shadow: Shadow {
-                    color: palette.accent.scale_alpha(0.30 * fade),
-                    offset: Vector::ZERO,
-                    blur_radius: 16.0,
-                },
-                ..container::Style::default()
-            });
-        stack = stack.push(
-            pin(highlight)
-                .x(rect.x - glow_clip.x)
-                .y(rect.y - glow_clip.y),
-        );
-    }
-    pin(container(stack)
-        .width(glow_clip.width)
-        .height(glow_clip.height)
-        .clip(true))
-    .x(glow_clip.x)
-    .y(glow_clip.y)
-    .into()
 }
 
 fn build_card<'a>(props: &Props<'a>, fade: f32, max_query_width: f32) -> Element<'a, Message> {
@@ -234,6 +185,10 @@ fn build_card<'a>(props: &Props<'a>, fade: f32, max_query_width: f32) -> Element
 
 struct PassiveHud<'a> {
     content: Element<'a, Message>,
+    glow_clip: Option<Rectangle>,
+    matched_boxes: Vec<Rectangle>,
+    fade: f32,
+    accent: Color,
     fade_start: Instant,
     fading: bool,
     on_fade_start: fn(Instant) -> Message,
@@ -319,6 +274,33 @@ impl Widget<Message, Theme, Renderer> for PassiveHud<'_> {
         _cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        if let Some(clip) = self.glow_clip
+            && !self.matched_boxes.is_empty()
+            && let Some(layer) = clip.intersection(viewport)
+        {
+            use iced::advanced::Renderer as _;
+            renderer.with_layer(layer, |renderer| {
+                for &bounds in &self.matched_boxes {
+                    renderer.fill_quad(
+                        renderer::Quad {
+                            bounds,
+                            border: Border {
+                                color: self.accent.scale_alpha(0.72 * self.fade),
+                                width: 1.5,
+                                radius: 10.0.into(),
+                            },
+                            shadow: Shadow {
+                                color: self.accent.scale_alpha(0.30 * self.fade),
+                                offset: Vector::ZERO,
+                                blur_radius: 16.0,
+                            },
+                            snap: false,
+                        },
+                        self.accent.scale_alpha(0.055 * self.fade),
+                    );
+                }
+            });
+        }
         self.content.as_widget().draw(
             &tree.children[0],
             renderer,

@@ -9,8 +9,8 @@ use iced::Task;
 
 use crate::application::LoadState;
 use crate::domain::matching::{
-    collapsed_repeat_unit, count_matches, has_prefix_match, pick_best_match, pick_cycled_match,
-    select_jump_match,
+    collapsed_repeat_unit, count_matches, has_prefix_match, match_name, pick_best_match,
+    pick_cycled_match, select_jump_match,
 };
 use crate::domain::{FileView, ViewId};
 use crate::{
@@ -930,13 +930,13 @@ impl Desktop {
         }
     }
 
-    pub(crate) fn reconcile_type_jump(&mut self) {
+    pub(crate) fn reconcile_type_jump(&mut self) -> Task<Message> {
         self.reconcile_earlier_ancestors();
         if self.application.workspace().mode() != crate::domain::Mode::Browse {
             self.type_jump.dismiss_session();
             self.clear_other_all_boxes_matches(None);
             self.clear_motion_reveals();
-            return;
+            return Task::none();
         }
         if !self.workspace_input_enabled() {
             self.clear_motion_reveals();
@@ -946,6 +946,36 @@ impl Desktop {
         {
             self.clear_other_all_boxes_matches(Some(active));
         }
+        let target_invalid = self
+            .type_jump
+            .session
+            .as_ref()
+            .is_some_and(|session| !self.session_target_still_valid(&session.target));
+        if target_invalid || !self.type_jump_allowed() {
+            self.type_jump.dismiss_session();
+        }
+        let Some(session) = self.type_jump.session.clone() else {
+            self.prune_inactive_all_boxes_matches();
+            return Task::none();
+        };
+        let (count, task) = match &session.target {
+            SessionTarget::Primary { view, .. } => {
+                self.prune_inactive_all_boxes_matches();
+                self.reconcile_primary_session(*view, &session.query)
+            }
+            SessionTarget::ColumnPreview { view, .. } => {
+                self.prune_inactive_all_boxes_matches();
+                self.reconcile_preview_session(*view, &session.query)
+            }
+            SessionTarget::AllBoxes => self.reconcile_all_boxes_session(&session.query),
+        };
+        if let Some(active_session) = &mut self.type_jump.session {
+            active_session.match_count = count;
+        }
+        task
+    }
+
+    fn prune_inactive_all_boxes_matches(&mut self) {
         let mut all_matches = std::mem::take(&mut self.type_jump.all_boxes_matches);
         all_matches.retain(|view, path| {
             self.application.workspace().can_browse(*view)
@@ -957,21 +987,168 @@ impl Desktop {
                 && self.visible_entry(*view, path).is_some()
         });
         self.type_jump.all_boxes_matches = all_matches;
-        let refreshed_count = self
-            .type_jump
-            .session
-            .as_ref()
-            .map(|session| self.count_session_matches(&session.target, &session.query));
-        if let (Some(session), Some(count)) = (&mut self.type_jump.session, refreshed_count) {
-            session.match_count = count;
+    }
+
+    fn reconcile_primary_session(&mut self, view: ViewId, query: &str) -> (usize, Task<Message>) {
+        let count = self.count_session_matches(
+            &SessionTarget::Primary {
+                view,
+                directory: PathBuf::new(),
+            },
+            query,
+        );
+        if count == 0 {
+            return (0, Task::none());
         }
-        let target_invalid = self
-            .type_jump
-            .session
-            .as_ref()
-            .is_some_and(|session| !self.session_target_still_valid(&session.target));
-        if target_invalid || !self.type_jump_allowed() {
-            self.type_jump.dismiss_session();
+        let selected_matches = self
+            .views
+            .get(&view)
+            .and_then(|state| state.selected.as_deref())
+            .is_some_and(|sel| {
+                self.visible_entry(view, sel).is_some()
+                    && sel
+                        .file_name()
+                        .is_some_and(|name| match_name(name, query).is_some())
+            });
+        if selected_matches {
+            return (count, Task::none());
         }
+        let chosen = {
+            let candidates = self.application.jump_candidates(view);
+            let names = candidates.iter().map(|cand| cand.entry.name.as_os_str());
+            pick_best_match(names, query).and_then(|(idx, _)| {
+                candidates
+                    .get(idx)
+                    .map(|cand| (cand.entry.path.clone(), cand.display_index))
+            })
+        };
+        let task = chosen.map_or_else(Task::none, |(path, display_index)| {
+            self.jump_to_entry(view, path, display_index)
+        });
+        (count, task)
+    }
+
+    fn reconcile_preview_session(&mut self, view: ViewId, query: &str) -> (usize, Task<Message>) {
+        let Some(scope) = self
+            .application
+            .workspace()
+            .view(view)
+            .map(|item| item.navigation.scope().clone())
+        else {
+            return (0, Task::none());
+        };
+        let count = self.count_session_matches(
+            &SessionTarget::ColumnPreview {
+                view,
+                directory: PathBuf::new(),
+            },
+            query,
+        );
+        if count == 0 {
+            return (0, Task::none());
+        }
+        let selected_matches = self
+            .column_previews
+            .selected_entry(view)
+            .is_some_and(|(_, sel)| {
+                self.column_previews
+                    .visible_entry(&scope, view, &sel)
+                    .is_some()
+                    && sel
+                        .file_name()
+                        .is_some_and(|name| match_name(name, query).is_some())
+            });
+        if selected_matches {
+            return (count, Task::none());
+        }
+        let chosen = {
+            let candidates = self.column_previews.jump_candidates(view, &scope);
+            let names = candidates.iter().map(|cand| cand.entry.name.as_os_str());
+            pick_best_match(names, query).and_then(|(idx, _)| {
+                candidates
+                    .get(idx)
+                    .map(|cand| (cand.entry.path.clone(), cand.display_index))
+            })
+        };
+        let Some((path, display_index)) = chosen else {
+            return (count, Task::none());
+        };
+        let geometry = self.geometry();
+        let viewport_h = self
+            .application
+            .workspace()
+            .box_for_view(view)
+            .map_or(0.0, |item| {
+                folder_box::scroller_geometry(geometry, item).viewport_height
+            });
+        let row_h = geometry.typography.row(file_list::ROW_HEIGHT);
+        self.demand_single_thumbnail(view, &path);
+        let reveal = self.column_previews.jump_select_and_reveal(
+            view,
+            path,
+            display_index,
+            viewport_h,
+            row_h,
+        );
+        (count, Task::batch([reveal, self.fill_thumbnails()]))
+    }
+
+    fn reconcile_all_boxes_session(&mut self, query: &str) -> (usize, Task<Message>) {
+        let views: Vec<ViewId> = self
+            .application
+            .browsable_box_views()
+            .into_iter()
+            .map(|(_, view)| view)
+            .collect();
+        let previous_matches = std::mem::take(&mut self.type_jump.all_boxes_matches);
+        let mut new_matches = HashMap::new();
+        let mut tasks = Vec::new();
+        for view in views {
+            let still_valid = previous_matches.get(&view).is_some_and(|prev| {
+                self.views
+                    .get(&view)
+                    .and_then(|state| state.selected.as_ref())
+                    == Some(prev)
+                    && self.visible_entry(view, prev).is_some()
+                    && prev
+                        .file_name()
+                        .is_some_and(|name| match_name(name, query).is_some())
+            });
+            if let Some(prev) = previous_matches.get(&view)
+                && still_valid
+            {
+                new_matches.insert(view, prev.clone());
+                continue;
+            }
+            let chosen = {
+                let candidates = self.application.jump_candidates(view);
+                let names = candidates.iter().map(|cand| cand.entry.name.as_os_str());
+                pick_best_match(names, query).and_then(|(idx, _)| {
+                    candidates
+                        .get(idx)
+                        .map(|cand| (cand.entry.path.clone(), cand.display_index))
+                })
+            };
+            if let Some((path, display_index)) = chosen {
+                new_matches.insert(view, path.clone());
+                tasks.push(self.jump_to_entry(view, path, display_index));
+            } else if let Some(prev_path) = previous_matches.get(&view)
+                && let Some(state) = self.views.get_mut(&view)
+                && state.selected.as_ref() == Some(prev_path)
+            {
+                state.selected = None;
+                state.selection.clear();
+                state.selection_anchor = None;
+                state.reveal_after_motion = false;
+            }
+        }
+        let has_any = !new_matches.is_empty();
+        self.type_jump.all_boxes_matches = new_matches;
+        let count = if has_any {
+            self.count_session_matches(&SessionTarget::AllBoxes, query)
+        } else {
+            0
+        };
+        (count, Task::batch(tasks))
     }
 }

@@ -585,11 +585,18 @@ impl Desktop {
         let picker = self.reconcile_picker();
         let column_previews = self.sync_column_previews();
         let file_actions = self.reconcile_file_actions();
-        self.reconcile_type_jump();
+        let type_jump = self.reconcile_type_jump();
         self.sync_updates();
         self.sync_application_menu();
         self.sync_diagnostics();
-        Task::batch([task, outbound, picker, column_previews, file_actions])
+        Task::batch([
+            task,
+            outbound,
+            picker,
+            column_previews,
+            file_actions,
+            type_jump,
+        ])
     }
 
     fn active_picker_generation(&self) -> Option<u64> {
@@ -812,9 +819,10 @@ impl Desktop {
         self.sync_box_settings();
         self.sync_launchers();
         self.reconcile_context_menus();
-        self.reconcile_type_jump();
+        let type_jump = self.reconcile_type_jump();
         task = Task::batch([
             task,
+            type_jump,
             self.reconcile_box_settings(settings_before),
             self.effects(effects),
         ]);
