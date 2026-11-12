@@ -624,7 +624,7 @@ fn tile_artwork<'a>(
     alpha: f32,
 ) -> Element<'a, Message> {
     let icon = icons::Icon::for_entry(entry);
-    crate::runtime::thumbnails::image_with_opacity(
+    let base: Element<'a, Message> = crate::runtime::thumbnails::image_with_opacity(
         props.thumbnails,
         props.view,
         props.revision,
@@ -632,5 +632,24 @@ fn tile_artwork<'a>(
         32.0,
         alpha,
     )
-    .unwrap_or_else(|| icons::view(icon, 32.0, Some(props.palette.icon(icon)), alpha).into())
+    .unwrap_or_else(|| icons::view(icon, 32.0, Some(props.palette.icon(icon)), alpha).into());
+    if !entry.dataless {
+        return base;
+    }
+    iced::widget::stack![
+        container(base).width(32.0).height(32.0),
+        container(icons::view(
+            icons::Icon::Cloud,
+            12.0,
+            Some(props.palette.muted),
+            alpha,
+        ))
+        .width(32.0)
+        .height(32.0)
+        .align_x(iced::Right)
+        .align_y(iced::Bottom),
+    ]
+    .width(32.0)
+    .height(32.0)
+    .into()
 }

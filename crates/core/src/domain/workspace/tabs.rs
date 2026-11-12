@@ -69,6 +69,18 @@ impl FolderBox {
     pub fn has_visible_tabs(&self) -> bool {
         self.tabs.as_ref().is_some_and(Tabs::visible)
     }
+    pub fn has_sidebar(&self) -> bool {
+        self.settings.sidebar && !self.has_visible_tabs()
+    }
+    pub fn left_panel(&self) -> super::LeftPanel {
+        if self.has_visible_tabs() {
+            super::LeftPanel::VerticalTabs
+        } else if self.settings.sidebar {
+            super::LeftPanel::Sidebar
+        } else {
+            super::LeftPanel::None
+        }
+    }
     pub fn default_folder(&self) -> &std::path::Path {
         self.standalone.navigation.start()
     }
@@ -135,6 +147,7 @@ impl FolderBox {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabCommand {
     Visible(bool),
+    LeftPanel(super::LeftPanel),
     Add,
     Activate(ViewId),
     Close(ViewId),
@@ -148,7 +161,7 @@ impl Workspace {
     pub fn can_change_tabs(&self, id: BoxId, command: TabCommand) -> bool {
         self.boxes.iter().any(|item| item.id == id)
             && match command {
-                TabCommand::Visible(_) => self.configuring(id),
+                TabCommand::Visible(_) | TabCommand::LeftPanel(_) => self.configuring(id),
                 TabCommand::Reorder { .. } => self.mode == Mode::Layout,
                 _ => self.mode == Mode::Browse || self.configuring(id),
             }
@@ -177,26 +190,10 @@ impl Workspace {
         let mut identity = self.next_identity;
         let changed = match command {
             TabCommand::Visible(visible) => {
-                if let Some(tabs) = &mut item.tabs {
-                    if tabs.visible == visible {
-                        false
-                    } else {
-                        tabs.visible = visible;
-                        true
-                    }
-                } else if visible {
-                    self.admit_view(&mut identity)?;
-                    let mut view = item.standalone.clone();
-                    view.view = ViewId(identity);
-                    item.tabs = Some(Tabs {
-                        views: vec![view],
-                        active: 0,
-                        visible: true,
-                    });
-                    true
-                } else {
-                    false
-                }
+                self.apply_tab_visibility(&mut item, visible, &mut identity)?
+            }
+            TabCommand::LeftPanel(panel) => {
+                self.apply_left_panel(&mut item, panel, &mut identity)?
             }
             other => Self::change_tab(&mut item, other, &mut identity, self.all_views().count())?,
         };
@@ -207,6 +204,80 @@ impl Workspace {
         proposal.boxes[index] = item;
         proposal.next_identity = identity;
         Ok(Some(proposal))
+    }
+
+    fn apply_tab_visibility(
+        &self,
+        item: &mut FolderBox,
+        visible: bool,
+        identity: &mut u64,
+    ) -> Result<bool, &'static str> {
+        let mut changed = if let Some(tabs) = &mut item.tabs {
+            if tabs.visible == visible {
+                false
+            } else {
+                tabs.visible = visible;
+                true
+            }
+        } else if visible {
+            self.admit_view(identity)?;
+            let mut view = item.standalone.clone();
+            view.view = ViewId(*identity);
+            item.tabs = Some(Tabs {
+                views: vec![view],
+                active: 0,
+                visible: true,
+            });
+            true
+        } else {
+            false
+        };
+        if visible && item.settings.sidebar {
+            item.settings.sidebar = false;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    fn apply_left_panel(
+        &self,
+        item: &mut FolderBox,
+        panel: super::LeftPanel,
+        identity: &mut u64,
+    ) -> Result<bool, &'static str> {
+        if item.left_panel() == panel {
+            return Ok(false);
+        }
+        match panel {
+            super::LeftPanel::None => {
+                item.settings.sidebar = false;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = false;
+                }
+            }
+            super::LeftPanel::Sidebar => {
+                item.settings.sidebar = true;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = false;
+                }
+            }
+            super::LeftPanel::VerticalTabs => {
+                item.settings.sidebar = false;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = true;
+                } else {
+                    self.admit_view(identity)?;
+                    let mut view = item.standalone.clone();
+                    view.view = ViewId(*identity);
+                    item.tabs = Some(Tabs {
+                        views: vec![view],
+                        active: 0,
+                        visible: true,
+                    });
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn admit_view(&self, identity: &mut u64) -> Result<(), &'static str> {
@@ -303,7 +374,7 @@ impl Workspace {
                     .ok_or("active tab is missing")?;
                 Ok(true)
             }
-            TabCommand::Visible(_) => Err("invalid tab command"),
+            TabCommand::Visible(_) | TabCommand::LeftPanel(_) => Err("invalid tab command"),
         }
     }
 

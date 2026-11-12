@@ -24,7 +24,9 @@ pub mod terraform;
 pub mod toolchains;
 pub mod zig;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub use folder::MountOrigin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CapabilityKind {
@@ -192,8 +194,35 @@ const DETECTORS: [Detector; 16] = [
 /// Inspect `directory` (the requested path) and `resolved` (its canonical target)
 /// along with bounded ancestors across all capability modules.
 pub fn detect_resolved(directory: &Path, resolved: &Path) -> FolderCapabilities {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    detect_in_context(directory, resolved, home.as_deref(), MountOrigin::Local)
+}
+
+/// Inspect `directory` and `resolved` with explicit home and mount context
+/// along with bounded ancestors across all capability modules.
+pub fn detect_in_context(
+    directory: &Path,
+    resolved: &Path,
+    home: Option<&Path>,
+    mount: MountOrigin,
+) -> FolderCapabilities {
+    let scan_contents = !matches!(mount, MountOrigin::Network { .. });
+    detect_in_context_measurable(directory, resolved, home, mount, scan_contents)
+}
+
+/// Inspect `directory` and `resolved` with explicit home, mount, and content-scan gate.
+pub fn detect_in_context_measurable(
+    directory: &Path,
+    resolved: &Path,
+    home: Option<&Path>,
+    mount: MountOrigin,
+    scan_contents: bool,
+) -> FolderCapabilities {
+    let mut items = folder::detect_with_context(directory, resolved, home, &mount);
+    if !scan_contents {
+        return FolderCapabilities::new(items);
+    }
     let ancestors = scan::ancestors(resolved);
-    let mut items = folder::detect(directory, resolved);
     for detector in DETECTORS {
         if let Some(item) = detector(&ancestors) {
             items.push(item);

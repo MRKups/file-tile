@@ -44,8 +44,8 @@ pub(crate) fn view(desktop: &Desktop, palette: a::Palette) -> Element<'_, Messag
         .as_ref()
         .filter(|drag| drag.active);
     let target = internal
-        .and_then(|drag| drag.target)
-        .or(desktop.file_drag.external_target);
+        .and_then(|drag| drag.target.as_ref())
+        .or(desktop.file_drag.external_target.as_ref());
     if internal.is_none() && target.is_none() {
         return space().into();
     }
@@ -70,8 +70,9 @@ pub(crate) fn view(desktop: &Desktop, palette: a::Palette) -> Element<'_, Messag
 
 fn operation_cue(desktop: &Desktop, drag: &InternalDrag, palette: a::Palette) -> OperationCue {
     let active_target = drag.target.is_some();
-    let badge = match drag.target {
+    let badge = match &drag.target {
         Some(DropTarget::Launcher { .. }) => Some((Icon::Link, palette.tool_active_icon)),
+        Some(DropTarget::SidebarPin { .. }) => Some((Icon::Pin, palette.tool_active_icon)),
         _ if desktop.modifiers.alt() => Some((Icon::Copy, palette.accent)),
         _ => None,
     };
@@ -407,81 +408,138 @@ fn icon_for_path(path: &Path) -> Icon {
     }
 }
 
-fn target_highlight(
-    desktop: &Desktop,
+fn target_highlight<'a>(
+    desktop: &'a Desktop,
     palette: a::Palette,
-    target: DropTarget,
+    target: &'a DropTarget,
     is_internal: bool,
-) -> Element<'_, Message> {
-    let rect = target.rect();
-    let label = target_label(desktop, target, is_internal);
-    let indicator = container(
+) -> Element<'a, Message> {
+    match target {
+        DropTarget::SidebarPin { marker, .. } => {
+            crate::boxes::sidebar::insertion_marker(*marker, palette)
+        }
+        DropTarget::SidebarRow { rect, label, .. } => {
+            sidebar_row_highlight(desktop, palette, *rect, label, is_internal)
+        }
+        DropTarget::FolderBox { .. } | DropTarget::Launcher { .. } => {
+            let rect = target.rect();
+            let label = target_label(desktop, target, is_internal);
+            let indicator = container(
+                palette
+                    .typography
+                    .small(label)
+                    .wrapping(text::Wrapping::None),
+            )
+            .padding([6, 12])
+            .max_width((rect.width - 24.0).max(48.0))
+            .clip(true)
+            .style(move |_| container::Style {
+                background: Some(
+                    Color {
+                        a: 0.96,
+                        ..palette.contrast_background
+                    }
+                    .into(),
+                ),
+                text_color: Some(palette.text),
+                border: Border {
+                    color: palette.tool_active_icon,
+                    width: 1.0,
+                    radius: 6.0.into(),
+                },
+                ..container::Style::default()
+            });
+            let highlight = container(indicator)
+                .width(rect.width)
+                .height(rect.height)
+                .center_x(rect.width)
+                .center_y(rect.height)
+                .style(move |_| container::Style {
+                    background: Some(
+                        Color {
+                            a: 0.14,
+                            ..palette.tool_active_icon
+                        }
+                        .into(),
+                    ),
+                    border: Border {
+                        color: palette.tool_active_icon,
+                        width: 2.0,
+                        radius: 10.0.into(),
+                    },
+                    ..container::Style::default()
+                });
+            pin(highlight).x(rect.x).y(rect.y).into()
+        }
+    }
+}
+
+fn sidebar_row_highlight<'a>(
+    desktop: &'a Desktop,
+    palette: a::Palette,
+    rect: iced::Rectangle,
+    label: &'a str,
+    is_internal: bool,
+) -> Element<'a, Message> {
+    let verb = transfer_verb(desktop, is_internal);
+    let caption = format!("{verb} {label}");
+    let row_fill = container(
         palette
             .typography
-            .small(label)
+            .caption(caption)
+            .color(palette.text)
             .wrapping(text::Wrapping::None),
     )
-    .padding([6, 12])
-    .max_width((rect.width - 24.0).max(48.0))
+    .padding([0, 10])
+    .width(rect.width)
+    .height(rect.height)
+    .align_y(iced::Center)
     .clip(true)
     .style(move |_| container::Style {
         background: Some(
             Color {
-                a: 0.96,
+                a: 0.92,
                 ..palette.contrast_background
             }
             .into(),
         ),
-        text_color: Some(palette.text),
         border: Border {
             color: palette.tool_active_icon,
-            width: 1.0,
-            radius: 6.0.into(),
+            width: 1.5,
+            radius: 4.0.into(),
         },
         ..container::Style::default()
     });
-    let highlight = container(indicator)
-        .width(rect.width)
-        .height(rect.height)
-        .center_x(rect.width)
-        .center_y(rect.height)
-        .style(move |_| container::Style {
-            background: Some(
-                Color {
-                    a: 0.14,
-                    ..palette.tool_active_icon
-                }
-                .into(),
-            ),
-            border: Border {
-                color: palette.tool_active_icon,
-                width: 2.0,
-                radius: 10.0.into(),
-            },
-            ..container::Style::default()
-        });
-    pin(highlight).x(rect.x).y(rect.y).into()
+    pin(row_fill).x(rect.x).y(rect.y).into()
 }
 
-fn target_label(desktop: &Desktop, target: DropTarget, is_internal: bool) -> String {
+fn transfer_verb(desktop: &Desktop, is_internal: bool) -> &'static str {
+    if !is_internal {
+        "Drop into"
+    } else if desktop.modifiers.alt() {
+        "Copy to"
+    } else {
+        "Move to"
+    }
+}
+
+fn target_label(desktop: &Desktop, target: &DropTarget, is_internal: bool) -> String {
     match target {
         DropTarget::Launcher { .. } => "Set shortcut".into(),
+        DropTarget::SidebarPin { .. } => "Pin to sidebar".into(),
+        DropTarget::SidebarRow { label, .. } => {
+            format!("{} {label}", transfer_verb(desktop, is_internal))
+        }
         DropTarget::FolderBox { view, .. } => {
             let folder = desktop
                 .application
                 .workspace()
-                .view(view)
+                .view(*view)
                 .and_then(|item| item.navigation.current().file_name())
                 .and_then(|name| name.to_str())
                 .filter(|name| !name.is_empty())
                 .unwrap_or("/");
-            let verb = if !is_internal {
-                "Drop into"
-            } else if desktop.modifiers.alt() {
-                "Copy to"
-            } else {
-                "Move to"
-            };
+            let verb = transfer_verb(desktop, is_internal);
             format!("{verb} {folder}")
         }
     }

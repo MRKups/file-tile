@@ -20,6 +20,7 @@ pub mod renaming;
 mod system_font;
 pub mod trash;
 pub mod updater;
+pub mod volumes;
 
 pub use datetime::format_local_datetime;
 pub use displays::{DisplayBounds, display_areas, system_accent_color, window_cursor_position};

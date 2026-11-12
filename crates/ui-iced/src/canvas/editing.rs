@@ -52,6 +52,9 @@ impl Desktop {
         self.pending_reads.clear();
         self.views.clear();
         self.tab_offsets.clear();
+        self.tab_drag = None;
+        self.sidebar_offsets.clear();
+        self.sidebar_drag = None;
         self.active_view = None;
         self.type_jump = crate::runtime::type_jump::State::default();
         self.focused_path = None;

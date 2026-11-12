@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 
 use iced::{Point, Rectangle, Task};
 
-use crate::application::Action;
-use crate::domain::{BoxId, LauncherConfig, LauncherIcon, LauncherTarget, Mode, ViewId};
+use crate::application::contracts::directory::EntryKind;
+use crate::application::{Action, LoadState};
+use crate::boxes::sidebar::{self, HitContext, HitZone};
+use crate::domain::{BoxId, FolderBox, LauncherConfig, LauncherIcon, LauncherTarget, Mode, ViewId};
 use crate::{Desktop, Message};
 
 pub(crate) use preview::view;
@@ -19,16 +21,36 @@ const DRAG_THRESHOLD: f32 = 6.0;
 const OUTBOUND_EDGE_MARGIN: f32 = 8.0;
 const LIFT_DURATION: Duration = Duration::from_millis(150);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum DropTarget {
-    FolderBox { view: ViewId, rect: Rectangle },
-    Launcher { id: BoxId, rect: Rectangle },
+    FolderBox {
+        view: ViewId,
+        rect: Rectangle,
+    },
+    Launcher {
+        id: BoxId,
+        rect: Rectangle,
+    },
+    SidebarPin {
+        id: BoxId,
+        index: usize,
+        marker: Rectangle,
+    },
+    SidebarRow {
+        view: ViewId,
+        directory: PathBuf,
+        label: String,
+        rect: Rectangle,
+    },
 }
 
 impl DropTarget {
-    fn rect(self) -> Rectangle {
+    fn rect(&self) -> Rectangle {
         match self {
-            Self::FolderBox { rect, .. } | Self::Launcher { rect, .. } => rect,
+            Self::FolderBox { rect, .. }
+            | Self::Launcher { rect, .. }
+            | Self::SidebarRow { rect, .. } => *rect,
+            Self::SidebarPin { marker, .. } => *marker,
         }
     }
 }
@@ -47,6 +69,7 @@ pub(crate) struct InternalDrag {
     pub release: ClickRelease,
     pub paths: Vec<PathBuf>,
     pub path_set: HashSet<PathBuf>,
+    pub pin_targets: Option<Vec<PathBuf>>,
     layout: geometry::SourceLayout,
     pub origin: Point,
     pub pointer: Point,
@@ -76,9 +99,11 @@ pub(crate) struct State {
     pub internal: Option<InternalDrag>,
     pub outbound_session: Option<(u64, ViewId)>,
     pub external_paths: Vec<PathBuf>,
+    pub external_pin_targets: Option<Vec<PathBuf>>,
     pub external_pointer: Option<Point>,
     pub external_target: Option<DropTarget>,
     pub dropped_paths: Vec<PathBuf>,
+    pub dropped_pin_targets: Option<Vec<PathBuf>>,
 }
 
 impl State {
@@ -115,10 +140,12 @@ impl State {
         self.outbound_session = None;
         self.clear_external();
         self.dropped_paths.clear();
+        self.dropped_pin_targets = None;
     }
 
     pub(crate) fn clear_external(&mut self) {
         self.external_paths.clear();
+        self.external_pin_targets = None;
         self.external_target = None;
     }
 }
@@ -190,6 +217,7 @@ impl Desktop {
         } else {
             paths
         };
+        let pin_targets = self.listed_pin_targets(view, &paths);
         let layout = geometry::measure_source(self, view, &pressed_path, &paths, origin);
         let path_set = paths.iter().cloned().collect();
         let now = Instant::now();
@@ -199,6 +227,7 @@ impl Desktop {
             release,
             paths,
             path_set,
+            pin_targets,
             layout,
             origin,
             pointer: origin,
@@ -209,22 +238,57 @@ impl Desktop {
         });
     }
 
+    fn listed_pin_targets(&self, view: ViewId, paths: &[PathBuf]) -> Option<Vec<PathBuf>> {
+        if paths.is_empty() {
+            return None;
+        }
+        let primary = self.application.load(view).and_then(LoadState::listing);
+        let preview = self.column_previews.retained_listing(view);
+        let mut targets = Vec::with_capacity(paths.len());
+        for path in paths {
+            let resolved = primary
+                .and_then(|list| {
+                    list.entry(path)
+                        .filter(|entry| entry.kind == EntryKind::Directory)
+                        .and_then(|entry| list.entry_target(entry))
+                })
+                .or_else(|| {
+                    preview.as_deref().and_then(|list| {
+                        list.entry(path)
+                            .filter(|entry| entry.kind == EntryKind::Directory)
+                            .and_then(|entry| list.entry_target(entry))
+                    })
+                })?;
+            targets.push(resolved.to_path_buf());
+        }
+        Some(targets)
+    }
+
     pub(crate) fn move_file_drag(&mut self, point: Point) -> bool {
         if !self.file_drag.external_paths.is_empty() {
             self.file_drag.external_pointer = Some(point);
-            let count = self.file_drag.external_paths.len();
-            self.file_drag.external_target = self.drop_target_at(point, None, count);
+            let ext_paths = self.file_drag.external_paths.clone();
+            let ext_pins = self.file_drag.external_pin_targets.clone();
+            self.file_drag.external_target =
+                self.drop_target_at(point, None, &ext_paths, ext_pins.as_deref());
         }
         let now = Instant::now();
-        let Some((source_view, count, active)) = self.file_drag.internal.as_mut().map(|drag| {
-            drag.pointer = point;
-            drag.now = now;
-            if !drag.active && point.distance(drag.origin) >= DRAG_THRESHOLD {
-                drag.active = true;
-                drag.activated_at = Some(now);
-            }
-            (drag.source_view, drag.paths.len(), drag.active)
-        }) else {
+        let Some((source_view, paths, pin_targets, active)) =
+            self.file_drag.internal.as_mut().map(|drag| {
+                drag.pointer = point;
+                drag.now = now;
+                if !drag.active && point.distance(drag.origin) >= DRAG_THRESHOLD {
+                    drag.active = true;
+                    drag.activated_at = Some(now);
+                }
+                (
+                    drag.source_view,
+                    drag.paths.clone(),
+                    drag.pin_targets.clone(),
+                    drag.active,
+                )
+            })
+        else {
             return false;
         };
         if !active {
@@ -234,7 +298,7 @@ impl Desktop {
             self.hand_off_outbound_drag();
             return true;
         }
-        let target = self.drop_target_at(point, Some(source_view), count);
+        let target = self.drop_target_at(point, Some(source_view), &paths, pin_targets.as_deref());
         if let Some(drag) = &mut self.file_drag.internal {
             drag.target = target;
         }
@@ -319,7 +383,13 @@ impl Desktop {
             return Task::none();
         }
         let moving = !self.modifiers.alt();
-        self.apply_drop(drag.target, drag.pointer, drag.paths, moving)
+        self.apply_drop(
+            drag.target,
+            drag.pointer,
+            drag.paths,
+            drag.pin_targets,
+            moving,
+        )
     }
 
     fn apply_click_release(&mut self, view: ViewId, pressed_path: PathBuf, release: ClickRelease) {
@@ -350,11 +420,17 @@ impl Desktop {
     pub(crate) fn hover_external_file(&mut self, path: PathBuf) {
         let point = self.live_cursor_position();
         self.file_drag.external_pointer = point;
+        if self.file_drag.external_paths.is_empty() {
+            self.file_drag.external_pin_targets = Some(Vec::new());
+        }
         if !self.file_drag.external_paths.contains(&path) {
+            update_external_pin_targets(&mut self.file_drag.external_pin_targets, &path);
             self.file_drag.external_paths.push(path);
         }
-        let count = self.file_drag.external_paths.len();
-        self.file_drag.external_target = point.and_then(|pt| self.drop_target_at(pt, None, count));
+        let ext_paths = self.file_drag.external_paths.clone();
+        let ext_pins = self.file_drag.external_pin_targets.clone();
+        self.file_drag.external_target =
+            point.and_then(|pt| self.drop_target_at(pt, None, &ext_paths, ext_pins.as_deref()));
     }
 
     pub(crate) fn clear_external_hover(&mut self) {
@@ -366,7 +442,11 @@ impl Desktop {
             self.file_drag.external_pointer = Some(point);
         }
         self.file_drag.clear_external();
+        if self.file_drag.dropped_paths.is_empty() {
+            self.file_drag.dropped_pin_targets = Some(Vec::new());
+        }
         if !self.file_drag.dropped_paths.contains(&path) {
+            update_external_pin_targets(&mut self.file_drag.dropped_pin_targets, &path);
             self.file_drag.dropped_paths.push(path);
         }
         if self.file_drag.dropped_paths.len() == 1 {
@@ -378,6 +458,7 @@ impl Desktop {
 
     pub(crate) fn flush_external_drop(&mut self) -> Task<Message> {
         let paths = std::mem::take(&mut self.file_drag.dropped_paths);
+        let pin_targets = self.file_drag.dropped_pin_targets.take();
         let point = self
             .file_drag
             .external_pointer
@@ -389,9 +470,9 @@ impl Desktop {
         let Some(point) = point else {
             return Task::none();
         };
-        let target = self.drop_target_at(point, None, paths.len());
+        let target = self.drop_target_at(point, None, &paths, pin_targets.as_deref());
         let moving = self.modifiers.command();
-        self.apply_drop(target, point, paths, moving)
+        self.apply_drop(target, point, paths, pin_targets, moving)
     }
 
     fn apply_drop(
@@ -399,6 +480,7 @@ impl Desktop {
         target: Option<DropTarget>,
         point: Point,
         paths: Vec<PathBuf>,
+        pin_targets: Option<Vec<PathBuf>>,
         moving: bool,
     ) -> Task<Message> {
         match target {
@@ -406,6 +488,31 @@ impl Desktop {
                 self.activate_view(view);
                 self.anchor_file_prompt(view, point);
                 self.transfer_paths_into(view, paths, moving)
+            }
+            Some(DropTarget::SidebarRow {
+                view, directory, ..
+            }) => {
+                self.activate_view(view);
+                self.anchor_file_prompt(view, point);
+                self.transfer_paths_into_directory(view, directory, paths, moving)
+            }
+            Some(DropTarget::SidebarPin { index, .. }) => {
+                let mut cursor = index;
+                let pin_list = pin_targets.unwrap_or_default();
+                let mut tasks = Vec::with_capacity(pin_list.len());
+                for path in pin_list {
+                    tasks.push(self.dispatch(Action::PinFolder {
+                        path: path.clone(),
+                        index: Some(cursor),
+                    }));
+                    cursor = self
+                        .application
+                        .pinned_folders()
+                        .iter()
+                        .position(|item| item == &path)
+                        .map_or(cursor, |pos| pos.saturating_add(1));
+                }
+                Task::batch(tasks)
             }
             Some(DropTarget::Launcher { id, .. }) => {
                 paths.into_iter().next().map_or_else(Task::none, |path| {
@@ -453,12 +560,13 @@ impl Desktop {
         &self,
         point: Point,
         source_view: Option<ViewId>,
-        item_count: usize,
+        paths: &[PathBuf],
+        pin_targets: Option<&[PathBuf]>,
     ) -> Option<DropTarget> {
         if !self.workspace_input_enabled()
             || self.application.workspace().mode() != Mode::Browse
             || self.application.files_busy()
-            || item_count == 0
+            || paths.is_empty()
         {
             return None;
         }
@@ -473,18 +581,37 @@ impl Desktop {
                 y: rect.y + geometry.viewport.y - geometry.offset.y,
                 ..rect
             };
+            if !bounds.contains(point) {
+                continue;
+            }
             let view = item.active_view().view;
-            if Some(view) != source_view
-                && bounds.contains(point)
-                && self.application.workspace().can_browse(view)
-            {
+            if !self.application.workspace().can_browse(view) {
+                continue;
+            }
+            let rail_w = sidebar::rail_width(item, bounds.width);
+            if item.has_sidebar() && point.x < bounds.x + rail_w {
+                return self.sidebar_drop_target(
+                    item,
+                    (bounds, geometry.viewport),
+                    point,
+                    source_view,
+                    (paths, pin_targets),
+                    geometry.typography,
+                );
+            }
+            let pane = Rectangle {
+                x: bounds.x + rail_w,
+                width: (bounds.width - rail_w).max(1.0),
+                ..bounds
+            };
+            if Some(view) != source_view && pane.contains(point) {
                 return Some(DropTarget::FolderBox {
                     view,
-                    rect: bounds.intersection(&geometry.viewport).unwrap_or(bounds),
+                    rect: pane.intersection(&geometry.viewport).unwrap_or(pane),
                 });
             }
         }
-        if item_count == 1 {
+        if paths.len() == 1 {
             for item in self.application.workspace().launchers() {
                 let rect = geometry.rect(item.rect);
                 let bounds = Rectangle {
@@ -501,6 +628,92 @@ impl Desktop {
             }
         }
         None
+    }
+
+    fn sidebar_drop_target(
+        &self,
+        item: &FolderBox,
+        (bounds, viewport): (Rectangle, Rectangle),
+        point: Point,
+        source_view: Option<ViewId>,
+        (paths, pin_targets): (&[PathBuf], Option<&[PathBuf]>),
+        ty: crate::window::typography::Style,
+    ) -> Option<DropTarget> {
+        let can_pin_all = pin_targets.is_some_and(|targets| {
+            !targets.is_empty()
+                && targets
+                    .iter()
+                    .all(|target| self.application.can_pin_folder(target))
+        });
+        let scroll_offset = self.sidebar_offsets.get(&item.id).copied().unwrap_or(0.0);
+        let zone = sidebar::hit_zone(
+            HitContext {
+                item,
+                box_bounds: bounds,
+                scroll_offset,
+                pinned: self.application.pinned_folders(),
+                locations: self.application.locations(),
+                home: self.application.home(),
+                all_directories: can_pin_all,
+                ty,
+            },
+            point,
+        )?;
+        match zone {
+            HitZone::PinInsert { index, marker } => Some(DropTarget::SidebarPin {
+                id: item.id,
+                index,
+                marker: marker.intersection(&viewport)?,
+            }),
+            HitZone::Row {
+                directory,
+                label,
+                rect,
+            } => {
+                let same_or_ancestor =
+                    |path: &PathBuf| path == &directory || directory.starts_with(path);
+                if !item.standalone.navigation.scope().allows(&directory)
+                    || self
+                        .application
+                        .safety_policy(Some(item.standalone.view))
+                        .check_read_directory(&directory)
+                        .is_err()
+                    || paths.iter().any(same_or_ancestor)
+                    || pin_targets.is_some_and(|targets| targets.iter().any(same_or_ancestor))
+                {
+                    return None;
+                }
+                let moving = if source_view.is_some() {
+                    !self.modifiers.alt()
+                } else {
+                    self.modifiers.command()
+                };
+                if moving
+                    && paths
+                        .iter()
+                        .all(|path| path.parent() == Some(directory.as_path()))
+                {
+                    return None;
+                }
+                Some(DropTarget::SidebarRow {
+                    view: item.standalone.view,
+                    directory,
+                    label,
+                    rect: rect.intersection(&viewport)?,
+                })
+            }
+        }
+    }
+}
+
+fn update_external_pin_targets(targets: &mut Option<Vec<PathBuf>>, path: &std::path::Path) {
+    let canonical = std::fs::metadata(path)
+        .ok()
+        .filter(std::fs::Metadata::is_dir)
+        .and_then(|_| std::fs::canonicalize(path).ok());
+    match (targets.as_mut(), canonical) {
+        (Some(list), Some(dir)) => list.push(dir),
+        _ => *targets = None,
     }
 }
 

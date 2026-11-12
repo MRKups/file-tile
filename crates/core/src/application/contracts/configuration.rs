@@ -46,6 +46,7 @@ pub struct AppPreferences {
     pub last_workspace_id: Option<WorkspaceId>,
     pub window: Option<crate::domain::WindowPlacement>,
     pub new_box_folder: Option<PathBuf>,
+    pub pinned_folders: Option<Vec<PathBuf>>,
     pub appearance: crate::application::preferences::appearance::AppearancePreferences,
     pub typography: crate::application::preferences::typography::TypographyPreferences,
     pub safety: crate::domain::SafetyPreferences,
@@ -53,6 +54,21 @@ pub struct AppPreferences {
 }
 
 pub const MAX_PATH_BYTES: usize = 4096;
+pub const MAX_PINNED_FOLDERS: usize = 128;
+
+/// Returns the default app-wide pinned sidebar folders (`Home`, `Desktop`,
+/// `Documents`, `Downloads`) rooted at `home`.
+pub fn default_pinned_folders(home: &Path) -> Vec<PathBuf> {
+    [
+        home.to_path_buf(),
+        home.join("Desktop"),
+        home.join("Documents"),
+        home.join("Downloads"),
+    ]
+    .into_iter()
+    .filter(|path| validate_saved_path(path).is_ok())
+    .collect()
+}
 
 /// Shared saved-path structure, without accessing or normalizing the filesystem.
 pub fn validate_saved_path(path: &Path) -> Result<(), &'static str> {

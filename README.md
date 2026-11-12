@@ -17,11 +17,11 @@
 | Preview | Feature |
 | :---: | :--- |
 | <img src="assets/readme/feature-grid.png" alt="Spatial 2D grid workspace" width="420"> | **Spatial 2D Grid and Workspaces**<br><br>Draw, move, swap, and resize folder boxes and compact shortcut tiles on a 2D grid. Organize layouts into separate named workspaces, undo layout edits with a single shortcut, and return to each box and tab at its saved scroll position across restarts and workspace switches. |
-| <img src="assets/readme/feature-scopes.png" alt="Navigation scopes and vertical tabs" width="420"> | **Navigation Scopes and Vertical Tabs**<br><br>Keep each box focused where it belongs. Browse freely (`Free`), lock a box to one folder (`Pinned`), stay within a folder subtree (`Branch`), or set custom start and stop boundaries (`Range`). Open multiple folders in one box with vertical tabs. |
-| <img src="assets/readme/feature-views.png" alt="List, Grid, and Columns views" width="420"> | **List, Grid, and Columns Views**<br><br>Choose the right view for each box. Inspect file sizes, modified dates, and folder usage in List view, browse image thumbnails in Grid view, or step through folder trees side by side in Columns view. Type to jump directly to matching files inside an active box or across every open box at once. |
+| <img src="assets/readme/feature-scopes.png" alt="Navigation scopes and vertical tabs" width="420"> | **Navigation Scopes, Sidebar, and Vertical Tabs**<br><br>Keep each box focused where it belongs. Browse freely (`Free`), lock a box to one folder (`Pinned`), stay within a folder subtree (`Branch`), or set custom start and stop boundaries (`Range`). Switch each box's left rail between `None`, a locations `Sidebar` (shared pinned folders plus mounted external drives, network shares, and OS-integrated cloud folders), and `Vertical tabs`. |
+| <img src="assets/readme/feature-views.png" alt="List, Grid, and Columns views" width="420"> | **List, Grid, and Columns Views**<br><br>Choose the right view for each box. Inspect file sizes, modified dates, online-only cloud indicators (without triggering unrequested downloads), and folder usage in List view, browse image thumbnails in Grid view, or step through folder trees side by side in Columns view. Type to jump directly to matching files inside an active box or across every open box at once. |
 | <img src="assets/readme/feature-actions.png" alt="Native file actions and drag-and-drop" width="420"> | **Native File Actions and Drag-and-Drop**<br><br>Copy, paste, move, rename, create files and folders, and move items to Trash. Drag files between boxes, or drag directly to and from external applications. |
 | <img src="assets/readme/feature-themes.png" alt="Themes, transparency, and typography" width="420"> | **Themes, Transparency, and Typography**<br><br>Match your desktop with automatic Light and Dark themes, translucent `Liquid` surfaces, box surface textures, custom color themes, and bundled or installed system fonts. |
-| <img src="assets/readme/feature-safety.png" alt="Access and safety settings" width="420"> | **Access and Safety Controls**<br><br>Manage folder permissions (`Desktop`, `Documents`, `Downloads`, `Full Disk Access`) in one place. Block accidental edits in system folders, `/Applications`, and credential directories (`~/.ssh`, `~/.gnupg`, `~/.aws`), or disable deletion per box. |
+| <img src="assets/readme/feature-safety.png" alt="Access and safety settings" width="420"> | **Access and Safety Controls**<br><br>Manage folder and volume permissions (`Desktop`, `Documents`, `Downloads`, detected cloud services, `External Drives`, `Network Shares`, and `Full Disk Access`) in one place, with sidebar lock indicators for ungranted or disabled locations. Block accidental edits in system folders, `/Applications`, and credential directories (`~/.ssh`, `~/.gnupg`, `~/.aws`), or disable deletion per box. |
 
 <p align="center">
   <a href="assets/readme/gallery-1-liquid-dark.png"><img src="assets/readme/gallery-1-liquid-dark.png" width="19%"></a>
@@ -86,7 +86,7 @@ CI=true cargo packager --release
 
 `file-tile` writes application data to `~/Library/Application Support/file-tile/`:
 
-- `config/preferences.json`: saved window bounds, appearance, typography, safety, and capability settings.
+- `config/preferences.json`: saved window bounds, appearance, typography, safety, capability settings, and pinned sidebar folders.
 - `config/workspaces.json`: ordered workspace index and workspace names.
 - `config/workspace-<uuid>.json`: saved boxes, shortcut tiles, tabs, navigation history, and per-view scroll positions for each workspace.
 - `config/user-themes.json`: custom user themes (created when you save a custom theme).

@@ -6,7 +6,7 @@ mod launchers;
 mod scroll;
 mod shape;
 mod tabs;
-pub use configuration::{BoxSetting, BoxSettings, FileView};
+pub use configuration::{BoxSetting, BoxSettings, FileView, LeftPanel};
 pub use launchers::{ItemPlacement, LauncherConfig, LauncherIcon, LauncherTarget, LauncherTile};
 pub use shape::{DrawPreview, DrawRejection, ItemKind};
 pub use tabs::{FolderView, TabCommand, Tabs, ViewRef};
@@ -133,6 +133,9 @@ impl Workspace {
     fn validate_box(item: &FolderBox, previous: &[FolderBox]) -> Result<(), &'static str> {
         if previous.len() >= Self::MAX_BOXES {
             return Err("workspace box limit exceeded");
+        }
+        if item.settings.sidebar && item.has_visible_tabs() {
+            return Err("box cannot show sidebar and vertical tabs simultaneously");
         }
         if item.id.0 == 0 || item.views().any(|view| view.view.0 == 0) {
             return Err("box and view identities must be positive");

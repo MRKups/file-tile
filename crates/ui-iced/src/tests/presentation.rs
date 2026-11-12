@@ -60,6 +60,7 @@ fn files_fixture() -> Result<Desktop, Box<dyn std::error::Error>> {
                 kind: EntryKind::File,
                 hidden: false,
                 symlink: false,
+                dataless: false,
                 inode: None,
             }
         })

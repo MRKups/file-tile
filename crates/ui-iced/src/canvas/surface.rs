@@ -32,6 +32,7 @@ use crate::{
 pub(crate) struct Presentation<'a> {
     pub tab_offsets: &'a HashMap<crate::domain::BoxId, f32>,
     pub tab_drag: Option<&'a crate::boxes::tab_drag::Drag>,
+    pub sidebar_drag: Option<&'a crate::boxes::sidebar::drag::Drag>,
     pub file_drag: &'a crate::menus::file_drag::State,
     pub column_previews: &'a crate::boxes::file_columns::Runtime,
     pub conflict_name: Option<&'a str>,
@@ -161,6 +162,10 @@ fn boxes<'a>(
                 thumbnails: Some(presentation.thumbnails),
                 files_closing: application.files_closing(),
                 home: application.home(),
+                pinned_folders: application.pinned_folders(),
+                ungranted_pins: application.ungranted_pins(),
+                locations: application.locations(),
+                safety_policy: application.safety_policy(Some(item.standalone.view)),
                 geometry,
                 interactive: workspace.can_browse(view) && application.accepts_workspace_input(),
                 dimmed: workspace.mode() == Mode::Configure
@@ -176,6 +181,9 @@ fn boxes<'a>(
                     .tab_drag
                     .filter(|drag| drag.id == item.id)
                     .map(|drag| drag.view),
+                dragged_pin: presentation
+                    .sidebar_drag
+                    .and_then(|drag| drag.active_from(item.id)),
                 sort_open: presentation.sort_menu == Some(view),
                 dragging: presentation.file_drag.dragged_set(view),
                 column_preview: presentation.column_previews.get(view),

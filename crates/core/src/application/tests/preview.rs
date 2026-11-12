@@ -21,6 +21,7 @@ fn fixture() -> Result<Application, Box<dyn std::error::Error>> {
                 kind: directory::EntryKind::File,
                 hidden: false,
                 symlink: false,
+                dataless: false,
                 inode: None,
             });
             let result = Ok(directory::DirectoryListing::new(

@@ -56,6 +56,7 @@ pub(in crate::application) fn boot(
                 last_workspace_id: Some(id),
                 window: None,
                 new_box_folder: None,
+                pinned_folders: None,
                 appearance: Default::default(),
                 typography: Default::default(),
                 safety: Default::default(),

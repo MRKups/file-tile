@@ -188,6 +188,16 @@ fn measure_with_limit(
     if !directory.is_absolute() {
         return Err(UsageFailure::Unavailable);
     }
+    if !crate::volumes::is_local_measurable_mount(directory) {
+        return Err(UsageFailure::Unavailable);
+    }
+    let meta = std::fs::metadata(directory).map_err(|_| UsageFailure::Unavailable)?;
+    {
+        use std::os::macos::fs::MetadataExt;
+        if (meta.st_flags() & 0x4000_0000) != 0 {
+            return Err(UsageFailure::Unavailable);
+        }
+    }
     let mut command = Command::new("/usr/bin/du");
     command.args(["--libxo", "json,flush", "-A", "-k", "-P", "-x", "-d", "1"]);
     for mask in excluded {

@@ -145,7 +145,10 @@ impl Draft {
 impl Desktop {
     pub(crate) fn visibility_before(&self, action: &Action) -> Vec<(ViewId, BoxSettings)> {
         match action {
-            Action::Undo => self
+            Action::Undo
+            | Action::StorageCompleted(
+                crate::application::contracts::storage::StorageCompletion::BudgetChecked { .. },
+            ) => self
                 .application
                 .workspace()
                 .boxes()
@@ -532,37 +535,13 @@ impl Desktop {
         }
         let mut needs_scroll_to = old_layout != layout;
         if let Some((old_scroller, new_scroller)) = scrollers {
-            if old_layout != layout
-                || old_scroller.compact != new_scroller.compact
-                || (old_scroller.compact && old_scroller.nav_height != new_scroller.nav_height)
-            {
-                let index = crate::boxes::scroll_position::offset_to_top_item(
-                    presentation.scroll.offset,
-                    old_scroller,
-                    old_layout,
-                    listing.display_len(old_settings.show_hidden),
-                    ty,
-                );
-                presentation.scroll.offset = crate::boxes::scroll_position::top_item_to_offset(
-                    index,
-                    new_scroller,
-                    layout,
-                    listing.display_len(show_hidden),
-                    ty,
-                );
-                needs_scroll_to = true;
-            } else if hidden_changed {
-                let max_y = crate::boxes::scroll_position::max_scroll_offset(
-                    new_scroller,
-                    layout,
-                    listing.display_len(show_hidden),
-                    ty,
-                );
-                if presentation.scroll.offset > max_y {
-                    presentation.scroll.offset = max_y;
-                    needs_scroll_to = true;
-                }
-            }
+            needs_scroll_to |= update_scroller_offset(
+                &mut presentation.scroll.offset,
+                (old_scroller, new_scroller),
+                (old_settings, new_settings),
+                listing,
+                ty,
+            );
         }
         let offset = presentation.scroll.offset;
         let revision = presentation.listing_revision;
@@ -577,6 +556,60 @@ impl Desktop {
             file_list::observe_scroll(view, revision)
         }
     }
+}
+
+fn update_scroller_offset(
+    offset: &mut f32,
+    (old_scroller, new_scroller): (
+        crate::boxes::folder_box::ScrollerGeometry,
+        crate::boxes::folder_box::ScrollerGeometry,
+    ),
+    (old_settings, new_settings): (BoxSettings, BoxSettings),
+    listing: &crate::application::contracts::directory::DirectoryListing,
+    ty: crate::window::typography::Style,
+) -> bool {
+    let old_layout = old_settings.file_view;
+    let layout = new_settings.file_view;
+    let hidden_changed = old_settings.show_hidden != new_settings.show_hidden;
+    let width_changed =
+        (old_scroller.content_width - new_scroller.content_width).abs() > f32::EPSILON;
+    let grid_reflow = layout == crate::domain::FileView::Grid
+        && crate::boxes::file_grid::columns(old_scroller.content_width, ty)
+            != crate::boxes::file_grid::columns(new_scroller.content_width, ty);
+    if old_layout != layout
+        || grid_reflow
+        || old_scroller.compact != new_scroller.compact
+        || (old_scroller.compact && old_scroller.nav_height != new_scroller.nav_height)
+    {
+        let index = crate::boxes::scroll_position::offset_to_top_item(
+            *offset,
+            old_scroller,
+            old_layout,
+            listing.display_len(old_settings.show_hidden),
+            ty,
+        );
+        *offset = crate::boxes::scroll_position::top_item_to_offset(
+            index,
+            new_scroller,
+            layout,
+            listing.display_len(new_settings.show_hidden),
+            ty,
+        );
+        return true;
+    }
+    if hidden_changed || width_changed {
+        let max_y = crate::boxes::scroll_position::max_scroll_offset(
+            new_scroller,
+            layout,
+            listing.display_len(new_settings.show_hidden),
+            ty,
+        );
+        if *offset > max_y {
+            *offset = max_y;
+            return true;
+        }
+    }
+    false
 }
 
 fn retain_visible_selection(

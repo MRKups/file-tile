@@ -48,6 +48,7 @@ fn removal_undo_restores_complete_state_and_keeps_identity_allocation_monotonic(
         show_dates: true,
         prohibit_delete: true,
         file_view: FileView::Columns,
+        sidebar: false,
     };
     removed.standalone.navigation = Navigation::restore(
         "/fixture/standalone/start".into(),

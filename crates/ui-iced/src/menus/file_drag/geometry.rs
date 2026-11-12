@@ -7,7 +7,7 @@ use iced::{Point, Rectangle, Size, Vector};
 use crate::domain::{FileView, FolderBox, ViewId};
 use crate::{
     Desktop,
-    boxes::{file_columns, file_grid, file_list, folder_box, navigation_header, tab_rail},
+    boxes::{file_columns, file_grid, file_list, folder_box, navigation_header, sidebar},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -104,7 +104,7 @@ fn item_bounds(
     ty: crate::window::typography::Style,
 ) -> Rectangle {
     let settings = box_item.settings;
-    let rail_width = tab_rail::width(box_item, box_bounds.width);
+    let rail_width = sidebar::rail_width(box_item, box_bounds.width);
     let pane_x = box_bounds.x + rail_width - row.scroll_x;
     let pane_width = (box_bounds.width - rail_width).max(1.0);
     let compact = folder_box::is_compact(pane_width, box_bounds.height, settings, ty)

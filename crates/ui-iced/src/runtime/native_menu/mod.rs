@@ -121,6 +121,7 @@ impl Desktop {
         {
             self.cancel_card_drag();
             self.tab_drag = None;
+            self.sidebar_drag = None;
             let task = self.dispatch(Action::RequestClose);
             return Task::batch([task, self.listen_for_quit()]);
         }

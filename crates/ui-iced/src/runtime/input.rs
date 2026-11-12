@@ -315,6 +315,9 @@ impl Desktop {
                 if self.move_file_drag(position) {
                     return Task::none();
                 }
+                if self.move_sidebar_drag(position) {
+                    return Task::none();
+                }
                 if self.tab_drag.is_some() {
                     self.move_tab_drag(position);
                     return Task::none();
@@ -338,6 +341,9 @@ impl Desktop {
                 self.window_drag = WindowDrag::Idle;
                 if self.file_drag.has_pending_or_active() {
                     return self.finish_file_drag();
+                }
+                if self.sidebar_drag.is_some() {
+                    return self.finish_sidebar_drag();
                 }
                 if self.tab_drag.is_some() {
                     return self.finish_tab_drag();
@@ -368,7 +374,13 @@ impl Desktop {
                 }
                 Task::none()
             }
-            Event::Window(iced_window::Event::Focused) => self.probe_path_focus(),
+            Event::Window(iced_window::Event::Focused) => {
+                self.reprobe_app_settings_on_focus();
+                Task::batch([
+                    self.probe_path_focus(),
+                    self.dispatch(Action::RefreshLocations),
+                ])
+            }
             Event::Window(iced_window::Event::Unfocused) => self.window_unfocused(),
             Event::Keyboard(keyboard::Event::KeyPressed {
                 key,
@@ -515,9 +527,11 @@ impl Desktop {
         if self.file_drag.has_pending_or_active()
             || !self.file_drag.external_paths.is_empty()
             || self.tab_drag.is_some()
+            || self.sidebar_drag.is_some()
         {
             self.file_drag.clear();
             self.tab_drag = None;
+            self.sidebar_drag = None;
             return self.dispatch(Action::Escape);
         }
         self.deactivate_all_views();
@@ -615,6 +629,7 @@ impl Desktop {
             && self.workspace_input_enabled()
             && self.window_drag == WindowDrag::Idle
             && self.tab_drag.is_none()
+            && self.sidebar_drag.is_none()
             && self.box_settings.is_none()
             && self.launchers.draft.is_none()
             && !self.file_drag.has_pending_or_active()

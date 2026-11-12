@@ -23,6 +23,7 @@ pub struct DirectoryEntry {
     pub kind: EntryKind,
     pub hidden: bool,
     pub symlink: bool,
+    pub dataless: bool,
     pub inode: Option<u64>,
 }
 
@@ -30,6 +31,7 @@ pub struct DirectoryEntry {
 pub struct DirectoryListing {
     pub directory: PathBuf,
     pub origin: ListingOrigin,
+    measurable: bool,
     entries: Vec<DirectoryEntry>,
     visible_indices: Vec<usize>,
     path_indices: Arc<[usize]>,
@@ -37,6 +39,7 @@ pub struct DirectoryListing {
     pub issues: Vec<DirectoryIssue>,
     resolved_links: std::collections::HashMap<PathBuf, PathBuf>,
     capabilities: crate::domain::FolderCapabilities,
+    mount: crate::capabilities::MountOrigin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,13 +84,33 @@ impl DirectoryListing {
         Self {
             directory,
             origin,
+            measurable: origin == ListingOrigin::Local,
             entries,
             visible_indices,
             path_indices: path_indices.into(),
             issues,
             resolved_links: std::collections::HashMap::new(),
             capabilities: crate::domain::FolderCapabilities::default(),
+            mount: crate::capabilities::MountOrigin::Local,
         }
+    }
+
+    pub fn with_mount(mut self, mount: crate::capabilities::MountOrigin) -> Self {
+        self.mount = mount;
+        self
+    }
+
+    pub fn mount(&self) -> &crate::capabilities::MountOrigin {
+        &self.mount
+    }
+
+    pub fn with_measurable(mut self, measurable: bool) -> Self {
+        self.measurable = measurable;
+        self
+    }
+
+    pub fn is_measurable(&self) -> bool {
+        self.measurable
     }
 
     pub fn with_capabilities(mut self, capabilities: crate::domain::FolderCapabilities) -> Self {
@@ -162,6 +185,7 @@ pub enum DirectoryErrorKind {
     NotFound,
     NotDirectory,
     PermissionDenied,
+    AccessDisabled,
     Unavailable,
     Other,
     Cancelled,
@@ -175,6 +199,7 @@ impl DirectoryErrorKind {
             Self::NotFound => Outcome::NotFound,
             Self::NotDirectory => Outcome::NotDirectory,
             Self::PermissionDenied => Outcome::PermissionDenied,
+            Self::AccessDisabled => Outcome::UnsafePath,
             Self::Unavailable => Outcome::Unavailable,
             Self::Other => Outcome::Failed,
             Self::Cancelled => Outcome::Cancelled,
@@ -197,6 +222,7 @@ impl DirectoryError {
             DirectoryErrorKind::NotFound => "the folder was not found",
             DirectoryErrorKind::NotDirectory => "the path is not a folder",
             DirectoryErrorKind::PermissionDenied => "access was denied",
+            DirectoryErrorKind::AccessDisabled => "access is turned off in Access and Safety",
             DirectoryErrorKind::Unavailable => "the location is unavailable",
             DirectoryErrorKind::Other => "the directory read failed",
             DirectoryErrorKind::Cancelled => "the request was cancelled",
@@ -219,6 +245,13 @@ impl DirectoryError {
             path,
             kind,
             detail: None,
+        }
+    }
+    pub fn access_disabled(path: PathBuf, reason: impl Into<String>) -> Self {
+        Self {
+            path,
+            kind: DirectoryErrorKind::AccessDisabled,
+            detail: Some(reason.into()),
         }
     }
 
@@ -257,6 +290,16 @@ pub trait DirectoryReader {
         crate::application::files::metadata::MetadataError,
     > {
         Err(crate::application::files::metadata::MetadataError::Unsupported)
+    }
+    fn sort_metadata(
+        &self,
+        path: &Path,
+        cancellation: &Cancellation,
+    ) -> Result<
+        crate::application::files::metadata::FileMetadata,
+        crate::application::files::metadata::MetadataError,
+    > {
+        self.metadata(path, cancellation)
     }
     fn list(&self, directory: &Path) -> Result<DirectoryListing, DirectoryError>;
 
@@ -302,6 +345,55 @@ pub trait DirectoryReader {
             ));
         }
         Ok(listing)
+    }
+    fn list_permitted(
+        &self,
+        directory: &Path,
+        scope: &crate::domain::Scope,
+        safety: &crate::domain::SafetyPolicy,
+        cancellation: &Cancellation,
+    ) -> Result<DirectoryListing, DirectoryError> {
+        if let Err(reason) = safety.check_read_directory(directory) {
+            return Err(DirectoryError::access_disabled(
+                directory.to_path_buf(),
+                reason,
+            ));
+        }
+        let listing = self.list_scoped(directory, scope, cancellation)?;
+        if let Some(reason) = safety
+            .check_read_directory(&listing.directory)
+            .err()
+            .or_else(|| check_mount_origin_access(&safety.preferences, listing.mount()).err())
+        {
+            return Err(DirectoryError::access_disabled(
+                directory.to_path_buf(),
+                reason,
+            ));
+        }
+        Ok(listing)
+    }
+}
+
+pub fn check_mount_origin_access(
+    safety: &crate::domain::SafetyPreferences,
+    mount: &crate::capabilities::MountOrigin,
+) -> Result<(), &'static str> {
+    match mount {
+        crate::capabilities::MountOrigin::Local => Ok(()),
+        crate::capabilities::MountOrigin::External { .. } => {
+            if safety.external_drives_access {
+                Ok(())
+            } else {
+                Err("External drive access is turned off in Access and Safety settings.")
+            }
+        }
+        crate::capabilities::MountOrigin::Network { .. } => {
+            if safety.network_shares_access {
+                Ok(())
+            } else {
+                Err("Network share access is turned off in Access and Safety settings.")
+            }
+        }
     }
 }
 

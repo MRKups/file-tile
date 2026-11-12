@@ -7,7 +7,7 @@ use iced::widget::{
 use iced::{Center, Element, Fill, Padding, mouse};
 
 use crate::application::Action;
-use crate::domain::{BoxId, BoxSetting};
+use crate::domain::{BoxId, BoxSetting, LeftPanel};
 use crate::{
     Desktop, Message,
     widgets::{focus_control, toggle_switch::toggle_switch},
@@ -209,78 +209,52 @@ fn fields<'a>(
     .into()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TabChoice {
-    None,
-    Vertical,
-}
-impl std::fmt::Display for TabChoice {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::None => "None",
-            Self::Vertical => "Vertical",
-        })
-    }
-}
 fn tabs_control(desktop: &Desktop, id: BoxId) -> Element<'_, Message> {
     let palette = desktop.configure_palette();
     let ty = palette.typography;
-    let visible = desktop
+    let current = desktop
         .application
         .workspace()
         .boxes()
         .iter()
         .find(|item| item.id == id)
-        .is_some_and(|item| item.tabs.as_ref().is_some_and(|tabs| tabs.visible()));
-    let select = pick_list(
-        [TabChoice::None, TabChoice::Vertical],
-        Some(if visible {
-            TabChoice::Vertical
-        } else {
-            TabChoice::None
-        }),
-        move |choice| {
-            Message::Action(Action::ChangeTabs(
-                id,
-                crate::domain::TabCommand::Visible(choice == TabChoice::Vertical),
-            ))
-        },
-    )
-    .width(155)
-    .padding([8, 12])
-    .text_size(ty.size(a::CONTROL_SIZE))
-    .font(ty.font())
-    .style(move |_, status| palette.inspector_picker(status))
-    .menu_style(move |_| palette.picker_menu());
-    let action = Message::Action(Action::ChangeTabs(
-        id,
-        crate::domain::TabCommand::Visible(!visible),
-    ));
+        .map_or(LeftPanel::None, crate::domain::FolderBox::left_panel);
+    let action = move |panel| {
+        Message::Action(Action::ChangeTabs(
+            id,
+            crate::domain::TabCommand::LeftPanel(panel),
+        ))
+    };
+    let index = LeftPanel::ALL
+        .iter()
+        .position(|candidate| *candidate == current)
+        .unwrap_or(0);
+    let select = pick_list(LeftPanel::ALL, Some(current), action)
+        .width(155)
+        .padding([8, 12])
+        .text_size(ty.size(a::CONTROL_SIZE))
+        .font(ty.font())
+        .style(move |_, status| palette.inspector_picker(status))
+        .menu_style(move |_| palette.picker_menu());
     let keys = vec![
         (
             iced::keyboard::key::Named::ArrowUp,
             iced::keyboard::Modifiers::empty(),
-            Message::Action(Action::ChangeTabs(
-                id,
-                crate::domain::TabCommand::Visible(false),
-            )),
+            action(LeftPanel::ALL[index.saturating_sub(1)]),
         ),
         (
             iced::keyboard::key::Named::ArrowDown,
             iced::keyboard::Modifiers::empty(),
-            Message::Action(Action::ChangeTabs(
-                id,
-                crate::domain::TabCommand::Visible(true),
-            )),
+            action(LeftPanel::ALL[(index + 1).min(LeftPanel::ALL.len() - 1)]),
         ),
     ];
     let mut fields = column![
         container(
             row![
-                ty.control("Tabs").width(Fill),
+                ty.control("Left panel").width(Fill),
                 container(focus_control::themed_highlight_keys(
                     TABS_ID,
-                    action,
+                    action(LeftPanel::ALL[(index + 1) % LeftPanel::ALL.len()]),
                     a::picker(palette, select),
                     keys,
                     palette
@@ -297,7 +271,7 @@ fn tabs_control(desktop: &Desktop, id: BoxId) -> Element<'_, Message> {
         fields = fields.push(ty.caption(error).color(palette.error));
     }
     if desktop.application.tab_pending(id) {
-        fields = fields.push(ty.caption("Checking tab change…").color(palette.muted));
+        fields = fields.push(ty.caption("Checking panel change…").color(palette.muted));
     }
     container(fields)
         .padding(Padding {

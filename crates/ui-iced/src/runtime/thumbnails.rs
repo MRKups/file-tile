@@ -1,7 +1,7 @@
 //! Bounded renderer resources and demand-driven image tasks, without navigation state.
 use crate::application::{
     LoadState,
-    contracts::directory::{Cancellation, EntryKind},
+    contracts::directory::{Cancellation, DirectoryListing, EntryKind, ListingOrigin},
     contracts::preview::{PreviewCompletion, PreviewData, PreviewRequest, image_candidate},
 };
 use crate::domain::{FileView, ViewId};
@@ -70,6 +70,12 @@ impl Desktop {
         let Some(listing) = self.application.load(view).and_then(LoadState::listing) else {
             return;
         };
+        let primary_local_ok = local_thumbnails_allowed(listing);
+        let preview_local_ok = self
+            .column_previews
+            .retained_listing(view)
+            .as_deref()
+            .is_some_and(local_thumbnails_allowed);
         let revision = self
             .views
             .get(&view)
@@ -84,9 +90,15 @@ impl Desktop {
                 image_candidate(path)
                     && listing
                         .entry(path)
-                        .or_else(|| self.column_previews.entry(view, path))
+                        .filter(|_| primary_local_ok)
+                        .or_else(|| {
+                            preview_local_ok
+                                .then(|| self.column_previews.entry(view, path))
+                                .flatten()
+                        })
                         .is_some_and(|entry| {
                             entry.kind == EntryKind::File
+                                && !entry.dataless
                                 && (item.settings.show_hidden || !entry.hidden)
                         })
                     && (item.settings.file_view == FileView::Grid
@@ -123,11 +135,24 @@ impl Desktop {
         let Some(listing) = self.application.load(view).and_then(LoadState::listing) else {
             return;
         };
+        let primary_local_ok = local_thumbnails_allowed(listing);
+        let preview_local_ok = self
+            .column_previews
+            .retained_listing(view)
+            .as_deref()
+            .is_some_and(local_thumbnails_allowed);
         let valid = listing
             .entry(path)
-            .or_else(|| self.column_previews.entry(view, path))
+            .filter(|_| primary_local_ok)
+            .or_else(|| {
+                preview_local_ok
+                    .then(|| self.column_previews.entry(view, path))
+                    .flatten()
+            })
             .is_some_and(|entry| {
-                entry.kind == EntryKind::File && (item.settings.show_hidden || !entry.hidden)
+                entry.kind == EntryKind::File
+                    && !entry.dataless
+                    && (item.settings.show_hidden || !entry.hidden)
             });
         if !valid {
             return;
@@ -326,4 +351,9 @@ pub(crate) fn error(props: file_list::Props<'_>, path: &Path) -> Option<String> 
         Some(Some(Err(error))) => Some(error.clone()),
         Some(None) => Some("Loading thumbnail…".into()),
     }
+}
+
+fn local_thumbnails_allowed(listing: &DirectoryListing) -> bool {
+    listing.origin != ListingOrigin::Local
+        || crate::platform::volumes::is_local_measurable_mount(&listing.directory)
 }

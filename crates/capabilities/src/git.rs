@@ -37,6 +37,9 @@ fn inspect_git_dir(
     git_dir: &Path,
     link_kind: Option<&str>,
 ) -> Option<CapabilityItem> {
+    if scan::is_dataless_path(git_dir) {
+        return None;
+    }
     let head = scan::read_first_line_path(&git_dir.join("HEAD"))?;
     let (head_short, head_detail) = parse_head(&head);
     let state = detect_operation(git_dir);
@@ -95,13 +98,23 @@ fn resolve_common_dir(git_dir: &Path) -> PathBuf {
 }
 
 fn count_stashes(common_dir: &Path) -> usize {
-    if let Some(log) = scan::read_bounded_path(&common_dir.join("logs/refs/stash")) {
+    if scan::is_dataless_path(common_dir) {
+        return 0;
+    }
+    let logs = common_dir.join("logs");
+    let logs_refs = logs.join("refs");
+    if !scan::is_dataless_path(&logs)
+        && !scan::is_dataless_path(&logs_refs)
+        && let Some(log) = scan::read_bounded_path(&logs_refs.join("stash"))
+    {
         let count = log.lines().filter(|line| !line.trim().is_empty()).count();
         if count > 0 {
             return count;
         }
     }
-    if scan::has_file_on_disk(common_dir, "refs/stash") {
+    if !scan::is_dataless_path(&common_dir.join("refs"))
+        && scan::has_file_on_disk(common_dir, "refs/stash")
+    {
         return 1;
     }
     if let Some(packed) = scan::read_bounded_path(&common_dir.join("packed-refs"))

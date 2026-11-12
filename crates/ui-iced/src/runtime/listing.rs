@@ -366,19 +366,16 @@ impl Desktop {
         }
     }
     pub(crate) fn list_directory(&mut self, request: ListingRequest) -> Task<Message> {
-        if let Err(reason) = self
-            .application
-            .safety_policy(Some(request.view))
-            .check_read_directory(&request.directory)
-        {
+        let safety = self.application.safety_policy(Some(request.view));
+        if let Err(reason) = safety.check_read_directory(&request.directory) {
             return Task::done(Message::Action(Action::ListingCompleted(
                 crate::application::contracts::directory::ListingCompletion {
-                    result: Err(crate::application::contracts::directory::DirectoryError {
-                        path: request.directory.clone(),
-                        kind:
-                            crate::application::contracts::directory::DirectoryErrorKind::PermissionDenied,
-                        detail: Some(reason.to_owned()),
-                    }),
+                    result: Err(
+                        crate::application::contracts::directory::DirectoryError::access_disabled(
+                            request.directory.clone(),
+                            reason,
+                        ),
+                    ),
                     request,
                 },
             )));
@@ -387,9 +384,10 @@ impl Desktop {
         match &self.directory {
             #[cfg(test)]
             DirectoryBackend::Controlled(reader) => {
-                let result = reader.list_scoped(
+                let result = reader.list_permitted(
                     &request.directory,
                     &scope,
+                    &safety,
                     &crate::application::contracts::directory::Cancellation::default(),
                 );
                 Task::done(Message::Action(Action::ListingCompleted(
@@ -397,7 +395,7 @@ impl Desktop {
                 )))
             }
             DirectoryBackend::Native(workers) => {
-                let future = workers.submit_scoped(request.clone(), scope);
+                let future = workers.submit_permitted(request.clone(), scope, safety);
                 let cancellation = future.cancellation();
                 let (task, handle) = Task::perform(future, |completion| {
                     Message::Action(Action::ListingCompleted(completion))

@@ -51,6 +51,7 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
                 super::surface::Presentation {
                     tab_offsets: &desktop.tab_offsets,
                     tab_drag: desktop.tab_drag.as_ref(),
+                    sidebar_drag: desktop.sidebar_drag.as_ref(),
                     file_drag: &desktop.file_drag,
                     column_previews: &desktop.column_previews,
                     conflict_name: desktop
@@ -90,6 +91,7 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
         stack![
             surface,
             tab_drag::view(desktop, palettes.boxes),
+            crate::boxes::sidebar::drag::view(desktop, palettes.boxes),
             file_drag::view(desktop, palettes.boxes),
             inspector,
             crate::widgets::keystroke_hud::view(desktop, palettes.boxes),
@@ -166,6 +168,8 @@ fn overlay<'a>(
         stack![surface, crate::menus::sort_menu::view(desktop)].into()
     } else if desktop.tab_menu.is_some() {
         stack![surface, crate::menus::tab_menu::view(desktop)].into()
+    } else if desktop.sidebar_menu.is_some() {
+        stack![surface, crate::menus::sidebar_menu::view(desktop)].into()
     } else if desktop.entry_menu.is_some() {
         stack![surface, crate::menus::entry_menu::view(desktop)].into()
     } else if desktop.folder_menu.is_some() {

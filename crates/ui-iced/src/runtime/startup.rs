@@ -5,6 +5,7 @@ use std::sync::Arc;
 use iced::Task;
 
 use crate::application::contracts::configuration::WorkspaceId;
+use crate::application::contracts::directory::Cancellation;
 use crate::application::contracts::storage::{
     SessionId, StartupOperation, StorageCompletion, StorageFailure,
 };
@@ -14,6 +15,18 @@ use crate::persistence::StorageWorker;
 use crate::{
     Desktop, DirectoryBackend, Message, runtime::launch::Launch, window::window_placement,
 };
+
+pub(crate) struct PendingLocations {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingLocations {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
 
 pub(crate) fn boot(launch: &Launch, directory: DirectoryBackend) -> (Desktop, Task<Message>) {
     let (mut application, effects) =
@@ -214,6 +227,12 @@ impl Desktop {
                 },
             ),
             Effect::ObserveDirectories(observations) => self.observe_directories(observations),
+            Effect::RefreshLocations {
+                generation,
+                home,
+                pinned,
+                safety,
+            } => self.refresh_locations_task(generation, home, pinned, safety),
             Effect::List(request) => {
                 let presentation = self.views.entry(request.view).or_default();
                 presentation.submitted_revision =
@@ -237,5 +256,40 @@ impl Desktop {
             }
         }));
         Task::batch([file_focus, reveal, effects])
+    }
+
+    fn refresh_locations_task(
+        &mut self,
+        generation: u64,
+        home: std::path::PathBuf,
+        pinned: Vec<std::path::PathBuf>,
+        safety: crate::domain::SafetyPreferences,
+    ) -> Task<Message> {
+        self.pending_locations = None;
+        let Some(workers) = &self.location_workers else {
+            return Task::done(Message::Action(Action::LocationsLoaded {
+                generation,
+                locations: Vec::new(),
+                ungranted_pins: std::collections::BTreeSet::new(),
+            }));
+        };
+        let (cancellation, future) = workers.detect(home, pinned, safety);
+        let (task, handle) = Task::perform(future, move |result| {
+            let (target_generation, locations, ungranted_pins) = match result {
+                Some((locations, ungranted_pins)) => (generation, locations, ungranted_pins),
+                None => (0, Vec::new(), std::collections::BTreeSet::new()),
+            };
+            Message::Action(Action::LocationsLoaded {
+                generation: target_generation,
+                locations,
+                ungranted_pins,
+            })
+        })
+        .abortable();
+        self.pending_locations = Some(PendingLocations {
+            cancellation,
+            handle,
+        });
+        task
     }
 }

@@ -18,6 +18,16 @@
         },
         "window": { "oneOf": [{ "$ref": "#/$defs/window" }, { "type": "null" }] },
         "new_box_folder": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] },
+        "pinned_folders": {
+          "oneOf": [
+            {
+              "type": "array",
+              "maxItems": 128,
+              "items": { "$ref": "#/$defs/path" }
+            },
+            { "type": "null" }
+          ]
+        },
         "appearance": { "$ref": "#/$defs/appearance" },
         "typography": { "$ref": "#/$defs/typography" },
         "safety": { "$ref": "#/$defs/safety" },
@@ -99,6 +109,13 @@
         "documents_access": { "type": "boolean" },
         "downloads_access": { "type": "boolean" },
         "full_disk_access": { "type": "boolean" },
+        "external_drives_access": { "type": "boolean" },
+        "network_shares_access": { "type": "boolean" },
+        "disabled_locations": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/path" }
+        },
         "system_folders": { "type": "boolean" },
         "applications": { "type": "boolean" },
         "credentials": { "type": "boolean" }
@@ -377,7 +394,8 @@
         "show_sizes": { "type": "boolean" },
         "show_dates": { "type": "boolean" },
         "prohibit_delete": { "type": "boolean" },
-        "file_view": { "enum": ["list", "grid", "columns"] }
+        "file_view": { "enum": ["list", "grid", "columns"] },
+        "sidebar": { "type": "boolean" }
       },
       "required": ["show_forward", "show_up", "show_start", "show_hidden", "show_sizes", "show_dates", "prohibit_delete", "file_view", "sort"],
       "additionalProperties": false

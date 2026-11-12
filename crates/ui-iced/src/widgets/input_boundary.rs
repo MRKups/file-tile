@@ -48,6 +48,8 @@ impl Desktop {
             }
         } else if self.tab_menu.is_some() {
             Some(self.tab_menu_input(event.clone()))
+        } else if self.sidebar_menu.is_some() {
+            Some(self.sidebar_menu_input(event.clone()))
         } else if self.entry_menu.is_some() {
             Some(self.entry_menu_input(event.clone()))
         } else if let Some(menu) = &self.folder_menu {

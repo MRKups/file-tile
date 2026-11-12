@@ -73,6 +73,8 @@ struct PreferencesRecord {
     last_workspace_id: Option<String>,
     window: Option<Value>,
     new_box_folder: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_present_value")]
+    pinned_folders: Option<Value>,
     appearance: Value,
     typography: Value,
     safety: Value,
@@ -98,29 +100,49 @@ impl From<crate::domain::CapabilityPreferences> for CapabilitiesRecord {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct SafetyRecord {
+#[derive(Serialize)]
+struct SafetyRecord<'a> {
     desktop_access: bool,
     documents_access: bool,
     downloads_access: bool,
     full_disk_access: bool,
+    external_drives_access: bool,
+    network_shares_access: bool,
+    #[serde(skip_serializing_if = "PathSet::is_empty")]
+    disabled_locations: PathSet<'a>,
     system_folders: bool,
     applications: bool,
     credentials: bool,
 }
 
-impl From<crate::domain::SafetyPreferences> for SafetyRecord {
-    fn from(safety: crate::domain::SafetyPreferences) -> Self {
+impl<'a> From<&'a crate::domain::SafetyPreferences> for SafetyRecord<'a> {
+    fn from(safety: &'a crate::domain::SafetyPreferences) -> Self {
         Self {
             desktop_access: safety.desktop_access,
             documents_access: safety.documents_access,
             downloads_access: safety.downloads_access,
             full_disk_access: safety.full_disk_access,
+            external_drives_access: safety.external_drives_access,
+            network_shares_access: safety.network_shares_access,
+            disabled_locations: PathSet(&safety.disabled_locations),
             system_folders: safety.system_folders,
             applications: safety.applications,
             credentials: safety.credentials,
         }
+    }
+}
+
+struct PathSet<'a>(&'a std::collections::BTreeSet<PathBuf>);
+
+impl PathSet<'_> {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for PathSet<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|path| PathRef(path)))
     }
 }
 
@@ -131,6 +153,50 @@ struct WindowRecord {
     y: i32,
     width: u32,
     height: u32,
+}
+
+fn restore_window_placement(
+    window: Option<Value>,
+    issues: &mut Vec<RecoveryIssue>,
+) -> Option<crate::domain::WindowPlacement> {
+    window.and_then(|value| {
+        let placement = serde_json::from_value::<WindowRecord>(value)
+            .ok()
+            .map(|record| crate::domain::WindowPlacement {
+                x: record.x,
+                y: record.y,
+                width: record.width,
+                height: record.height,
+            })
+            .filter(|placement| placement.valid());
+        if placement.is_none() {
+            issue(
+                issues,
+                0,
+                "invalid window bounds; using default placement for viewing only",
+            );
+        }
+        placement
+    })
+}
+
+fn restore_new_box_folder(
+    new_box_folder: Option<Value>,
+    issues: &mut Vec<RecoveryIssue>,
+) -> Option<PathBuf> {
+    new_box_folder.and_then(|value| {
+        let path = serde_json::from_value::<PathRecord>(value)
+            .ok()
+            .and_then(|record| record.into_path().ok());
+        if path.is_none() {
+            issue(
+                issues,
+                0,
+                "invalid starting folder; using Home for viewing only",
+            );
+        }
+        path
+    })
 }
 
 fn preferences(
@@ -157,38 +223,10 @@ fn preferences(
         .last_workspace_id
         .map(|value| WorkspaceId::parse(&value).map_err(|_| ConfigError::InvalidPayload))
         .transpose()?;
-    let window = record.window.and_then(|value| {
-        let placement = serde_json::from_value::<WindowRecord>(value)
-            .ok()
-            .map(|record| crate::domain::WindowPlacement {
-                x: record.x,
-                y: record.y,
-                width: record.width,
-                height: record.height,
-            })
-            .filter(|placement| placement.valid());
-        if placement.is_none() {
-            issue(
-                issues,
-                0,
-                "invalid window bounds; using default placement for viewing only",
-            );
-        }
-        placement
-    });
-    let new_box_folder = record.new_box_folder.and_then(|value| {
-        let path = serde_json::from_value::<PathRecord>(value)
-            .ok()
-            .and_then(|record| record.into_path().ok());
-        if path.is_none() {
-            issue(
-                issues,
-                0,
-                "invalid starting folder; using Home for viewing only",
-            );
-        }
-        path
-    });
+    let window = restore_window_placement(record.window, issues);
+    let new_box_folder = restore_new_box_folder(record.new_box_folder, issues);
+    let (pinned_folders, _pinned_healed) =
+        super::healing::preferences_fields::restore_pinned_folders(record.pinned_folders);
     let appearance = super::appearance::restore(record.appearance).unwrap_or_else(|| {
         issue(
             issues,
@@ -217,6 +255,7 @@ fn preferences(
         last_workspace_id,
         window,
         new_box_folder,
+        pinned_folders,
         appearance,
         typography,
         safety,
@@ -326,7 +365,7 @@ struct BoxRecord {
     id: u64,
     bounds: BoundsRecord,
     standalone_view: ViewRecord,
-    settings: SettingsRecord,
+    settings: SettingsDecodeRecord,
     tabs: Option<TabsRecord>,
 }
 
@@ -338,8 +377,23 @@ struct TabsRecord {
     views: Vec<ViewRecord>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SettingsDecodeRecord {
+    sort: super::sorting::SortRecord,
+    show_forward: bool,
+    show_up: bool,
+    show_start: bool,
+    show_hidden: bool,
+    show_sizes: bool,
+    show_dates: bool,
+    prohibit_delete: bool,
+    file_view: FileViewRecord,
+    #[serde(default, deserialize_with = "deserialize_present_value")]
+    sidebar: Option<Value>,
+}
+
+#[derive(Serialize)]
 struct SettingsRecord {
     sort: super::sorting::SortRecord,
     show_forward: bool,
@@ -350,6 +404,7 @@ struct SettingsRecord {
     show_dates: bool,
     prohibit_delete: bool,
     file_view: FileViewRecord,
+    sidebar: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -376,6 +431,7 @@ impl From<BoxSettings> for SettingsRecord {
                 crate::domain::FileView::Grid => FileViewRecord::Grid,
                 crate::domain::FileView::Columns => FileViewRecord::Columns,
             },
+            sidebar: settings.sidebar,
         }
     }
 }
@@ -462,6 +518,9 @@ fn restore_box(
             Tabs::restore(views, ViewId(tabs.active_view), tabs.visible)
         })
         .transpose()?;
+    let tabs_visible = tabs.as_ref().is_some_and(Tabs::visible);
+    let (sidebar, _sidebar_healed) =
+        super::healing::view_fields::restore_box_sidebar(record.settings.sidebar, tabs_visible);
     Ok(FolderBox {
         id: BoxId(record.id),
         rect: record.bounds.into(),
@@ -481,6 +540,7 @@ fn restore_box(
                 FileViewRecord::Grid => crate::domain::FileView::Grid,
                 FileViewRecord::Columns => crate::domain::FileView::Columns,
             },
+            sidebar,
         },
     })
 }
@@ -601,6 +661,13 @@ fn validate_document(document: &ConfigurationDocument) -> Result<(), ConfigError
                     "window dimensions must be positive".into(),
                 ));
             }
+            if preferences.pinned_folders.as_ref().is_some_and(|folders| {
+                folders.len() > crate::application::contracts::configuration::MAX_PINNED_FOLDERS
+            }) || preferences.safety.disabled_locations.len()
+                > crate::domain::MAX_DISABLED_LOCATIONS
+            {
+                return Err(ConfigError::LimitExceeded);
+            }
         }
         ConfigurationDocument::WorkspaceIndex(index) => {
             if index.workspaces.len() > WorkspaceIndex::MAX_WORKSPACES {
@@ -658,6 +725,10 @@ impl Serialize for DocumentRef<'_> {
                     &preferences.new_box_folder.as_deref().map(PathRef),
                 )?;
                 map.serialize_entry(
+                    "pinned_folders",
+                    &preferences.pinned_folders.as_deref().map(PathSlice),
+                )?;
+                map.serialize_entry(
                     "appearance",
                     &super::appearance::AppearanceRecord::from(preferences.appearance),
                 )?;
@@ -665,7 +736,7 @@ impl Serialize for DocumentRef<'_> {
                     "typography",
                     &super::typography::TypographyRecord::from(preferences.typography),
                 )?;
-                map.serialize_entry("safety", &SafetyRecord::from(preferences.safety))?;
+                map.serialize_entry("safety", &SafetyRecord::from(&preferences.safety))?;
                 map.serialize_entry(
                     "capabilities",
                     &CapabilitiesRecord::from(preferences.capabilities),
@@ -788,6 +859,14 @@ impl Serialize for Views<'_> {
 struct Paths<'a>(&'a VecDeque<PathBuf>);
 
 impl Serialize for Paths<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|path| PathRef(path)))
+    }
+}
+
+struct PathSlice<'a>(&'a [PathBuf]);
+
+impl Serialize for PathSlice<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|path| PathRef(path)))
     }

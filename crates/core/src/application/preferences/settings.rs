@@ -26,6 +26,7 @@ impl Application {
                 action,
                 crate::application::Action::ListingCompleted(_)
                     | crate::application::Action::WatchCompleted(_)
+                    | crate::application::Action::LocationsLoaded { .. }
                     | crate::application::Action::CancelPointer
                     | crate::application::Action::MetadataNeeded(..)
                     | crate::application::Action::MetadataCompleted(_)
@@ -113,7 +114,7 @@ impl Application {
     pub fn safety(&self) -> crate::domain::SafetyPreferences {
         self.configuration
             .as_ref()
-            .map(|(preferences, _)| preferences.safety)
+            .map(|(preferences, _)| preferences.safety.clone())
             .unwrap_or_default()
     }
 
@@ -138,9 +139,10 @@ impl Application {
     pub(in crate::application) fn open_app_settings(&mut self) -> Vec<Effect> {
         if self.can_configure_application() && self.configuration_editor.is_none() {
             self.pending_tabs = None;
-            let effects = self.cancel_folder_configuration();
+            let mut effects = self.cancel_folder_configuration();
             self.workspace.cancel_pointer();
             self.configuration_editor = Some(ConfigurationEditor::ApplicationSettings);
+            effects.extend(self.refresh_locations());
             return effects;
         }
         Vec::new()
@@ -165,6 +167,7 @@ impl Application {
             || !self.app_settings_open()
             || !typography.is_valid()
             || !valid_custom
+            || safety.disabled_locations.len() > crate::domain::MAX_DISABLED_LOCATIONS
             || UserTheme::validate_collection(&user_themes).is_err()
             || new_box_folder
                 .as_deref()
@@ -175,7 +178,7 @@ impl Application {
         let Some((preferences, _)) = &mut self.configuration else {
             return Vec::new();
         };
-        let previous_safety = preferences.safety;
+        let previous_safety = preferences.safety.clone();
         let themes_changed = self.user_themes.as_ref() != user_themes.as_slice();
         let changed = themes_changed
             || preferences.new_box_folder != new_box_folder
@@ -195,8 +198,12 @@ impl Application {
         }
         self.configuration_editor = None;
         if changed {
+            let safety_changed = previous_safety != self.safety();
             configuration_changed(Change::AppSettings);
             let mut effects = self.reconcile_safety_views(previous_safety);
+            if safety_changed {
+                effects.extend(self.refresh_locations());
+            }
             effects.extend(self.save_effect(true));
             effects
         } else {

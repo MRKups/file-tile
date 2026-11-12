@@ -8,7 +8,7 @@ pub(super) fn perform(
     parent: &std::fs::Metadata,
     original: &mut Option<Identity>,
 ) -> Result<Outcome, Failure> {
-    let before = inspect_copy_source(source, &job.directory)?;
+    let before = inspect_copy_source(job, source, &job.directory)?;
     *original = Some(identity(&before));
     if job
         .rename_identity
@@ -31,6 +31,7 @@ pub(super) fn perform(
     if canonical_parent != source_parent {
         return Err("Move source folder is not its resolved path. Copy the source again from its actual folder.".into());
     }
+    super::check_mount_access(&job.safety.preferences, &canonical_parent)?;
     job.safety
         .check_entry_modification(source)
         .map_err(Failure::from)?;

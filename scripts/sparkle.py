@@ -191,6 +191,9 @@ def cmd_prepare(_args: argparse.Namespace) -> int:
         "NSDesktopFolderUsageDescription": "file-tile needs access to browse files in your Desktop folder.",
         "NSDocumentsFolderUsageDescription": "file-tile needs access to browse files in your Documents folder.",
         "NSDownloadsFolderUsageDescription": "file-tile needs access to browse files in your Downloads folder.",
+        "NSFileProviderDomainUsageDescription": "file-tile needs access to browse files in your cloud storage folders.",
+        "NSRemovableVolumesUsageDescription": "file-tile needs access to browse files on external drives.",
+        "NSNetworkVolumesUsageDescription": "file-tile needs access to browse files on network shares.",
     }
     if public_key:
         plist_payload["SUPublicEDKey"] = public_key

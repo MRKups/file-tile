@@ -114,6 +114,13 @@ impl crate::Desktop {
                 .iter()
                 .any(|item| item.id == *id)
         });
+        self.sidebar_offsets.retain(|id, _| {
+            self.application
+                .workspace()
+                .boxes()
+                .iter()
+                .any(|item| item.id == *id && item.has_sidebar())
+        });
         if let Some((view, tabbed)) = activated {
             self.type_jump.dismiss_session();
             self.activate_view(view);

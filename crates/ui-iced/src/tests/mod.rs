@@ -242,6 +242,7 @@ fn listing(directory: &str, count: usize) -> LoadState {
                     kind: EntryKind::Directory,
                     hidden: false,
                     symlink: false,
+                    dataless: false,
                     inode: None,
                 }
             })

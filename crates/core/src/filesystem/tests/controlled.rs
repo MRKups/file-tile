@@ -28,6 +28,7 @@ impl Default for ControlledDirectory {
                     kind,
                     hidden: name.starts_with('.'),
                     symlink: false,
+                    dataless: false,
                     inode: None,
                 })
                 .collect();

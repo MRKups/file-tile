@@ -238,6 +238,14 @@ fn row_content<'a>(
     ]
     .spacing(10)
     .align_y(iced::Center);
+    if entry.dataless {
+        row = row.push(icons::view(
+            Icon::Cloud,
+            ty.icon(13.0),
+            Some(muted),
+            label_alpha,
+        ));
+    }
     if entry.symlink {
         row = row.push(ty.caption("link").color(muted));
     }

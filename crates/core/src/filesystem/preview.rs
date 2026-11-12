@@ -81,6 +81,14 @@ pub(super) fn read(path: &Path, cancellation: &Cancellation) -> Result<PreviewDa
     if !info.is_file() {
         return Err("Cannot thumbnail this entry type. Only regular files are supported.".into());
     }
+    if is_dataless(&info) {
+        return Err("Online-only cloud file. Open the file to download it.".into());
+    }
+    if !crate::platform::volumes::is_local_measurable_mount(path) {
+        return Err(
+            "Automatic thumbnails are disabled on network and virtual drives. Use Open.".into(),
+        );
+    }
     if info.len() > IMAGE_LIMIT {
         return Err("Cannot load thumbnail: image exceeds 20 MiB. Use Open.".into());
     }
@@ -235,6 +243,19 @@ pub(super) fn dimensions(width: u32, height: u32) -> Result<(), String> {
         return Err("Cannot load thumbnail: dimensions exceed the 16-megapixel or 16,384-pixel axis limit, or are zero. Use Open.".into());
     }
     Ok(())
+}
+
+fn is_dataless(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        (metadata.st_flags() & 0x4000_0000) != 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = metadata;
+        false
+    }
 }
 
 fn unchanged(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {

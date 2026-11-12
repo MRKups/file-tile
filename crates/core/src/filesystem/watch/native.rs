@@ -19,12 +19,13 @@ struct Route {
 
 pub(super) struct Plan {
     routes: Vec<Route>,
+    location_targets: Vec<PathBuf>,
     roots: BTreeSet<PathBuf>,
     pub stamp: Vec<(PathBuf, u64, u64)>,
 }
 
 impl Plan {
-    pub fn new(observations: &[DirectoryObservation]) -> Self {
+    pub fn new(observations: &[DirectoryObservation], location_roots: &[PathBuf]) -> Self {
         let mut grouped: BTreeMap<PathBuf, Vec<ObservationTag>> = BTreeMap::new();
         for observation in observations {
             grouped
@@ -34,24 +35,12 @@ impl Plan {
         }
         let mut plan = Self {
             routes: Vec::new(),
+            location_targets: Vec::new(),
             roots: BTreeSet::new(),
             stamp: Vec::new(),
         };
         for (directory, tags) in grouped {
-            let current = std::fs::canonicalize(&directory)
-                .ok()
-                .filter(|path| path.is_dir());
-            let parent = nearest_parent(&directory);
-            let target = current.clone().unwrap_or_else(|| {
-                parent.as_ref().map_or_else(
-                    || directory.clone(),
-                    |(original, resolved)| {
-                        directory
-                            .strip_prefix(original)
-                            .map_or_else(|_| directory.clone(), |suffix| resolved.join(suffix))
-                    },
-                )
-            });
+            let (current, parent, target) = resolve_target(&directory);
             if let Some(current) = &current {
                 plan.roots.insert(current.clone());
             }
@@ -63,6 +52,17 @@ impl Plan {
                 tags,
                 available: current.is_some(),
             });
+        }
+        for loc in location_roots {
+            let (current, parent, target) = resolve_target(loc);
+            if let Some(current) = current {
+                plan.roots.insert(current);
+            } else if let Some((_, parent)) = parent {
+                plan.roots.insert(parent);
+            }
+            if !plan.location_targets.contains(&target) {
+                plan.location_targets.push(target);
+            }
         }
         #[cfg(unix)]
         for root in &plan.roots {
@@ -99,6 +99,24 @@ impl Plan {
     }
 }
 
+fn resolve_target(directory: &Path) -> (Option<PathBuf>, Option<(PathBuf, PathBuf)>, PathBuf) {
+    let current = std::fs::canonicalize(directory)
+        .ok()
+        .filter(|path| path.is_dir());
+    let parent = nearest_parent(directory);
+    let target = current.clone().unwrap_or_else(|| {
+        parent.as_ref().map_or_else(
+            || directory.to_path_buf(),
+            |(original, resolved)| {
+                directory
+                    .strip_prefix(original)
+                    .map_or_else(|_| directory.to_path_buf(), |suffix| resolved.join(suffix))
+            },
+        )
+    });
+    (current, parent, target)
+}
+
 fn nearest_parent(directory: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut candidate = directory.parent();
     while let Some(path) = candidate {
@@ -122,17 +140,20 @@ impl Native {
     pub fn start(plan: &Plan, shared: Arc<Shared>, epoch: u64) -> Result<Self, String> {
         use notify::{PathOp, Watcher};
         let routes = plan.routes.clone();
+        let location_targets = plan.location_targets.clone();
         let callback = move |event: notify::Result<notify::Event>| match event {
             Ok(event) => {
                 if matches!(event.kind, notify::EventKind::Access(_)) {
                     return;
                 }
                 let all = event.need_rescan() || event.paths.len() > 512;
-                let (tags, recheck) = route_event(&routes, &event.paths, all);
-                if !tags.is_empty() {
+                let (tags, locations, recheck) =
+                    route_event(&routes, &location_targets, &event.paths, all);
+                if !tags.is_empty() || locations {
                     shared.signal(Signal::Changed {
                         epoch,
                         tags,
+                        locations,
                         recheck,
                     });
                 }
@@ -167,22 +188,37 @@ impl Native {
 }
 
 #[cfg(target_os = "macos")]
-fn route_event(routes: &[Route], paths: &[PathBuf], all: bool) -> (Vec<ObservationTag>, bool) {
+fn route_event(
+    routes: &[Route],
+    location_targets: &[PathBuf],
+    paths: &[PathBuf],
+    all: bool,
+) -> (Vec<ObservationTag>, bool, bool) {
     let mut tags = Vec::new();
     let mut recheck = all;
     for route in routes {
-        if all
-            || paths.iter().any(|path| {
-                path == &route.target
-                    || path.parent() == Some(route.target.as_path())
-                    || route.target.starts_with(path)
-            })
-        {
+        if all || matches_target(&route.target, paths) {
             tags.extend(route.tags.iter().copied());
             if !recheck {
                 recheck = paths.iter().any(|path| route.target.starts_with(path));
             }
         }
     }
-    (tags, recheck)
+    let mut locations = all && !location_targets.is_empty();
+    for target in location_targets {
+        if all || matches_target(target, paths) {
+            locations = true;
+            if !recheck {
+                recheck = paths.iter().any(|path| target.starts_with(path));
+            }
+        }
+    }
+    (tags, locations, recheck)
+}
+
+#[cfg(target_os = "macos")]
+fn matches_target(target: &Path, paths: &[PathBuf]) -> bool {
+    paths
+        .iter()
+        .any(|path| path == target || path.parent() == Some(target) || target.starts_with(path))
 }

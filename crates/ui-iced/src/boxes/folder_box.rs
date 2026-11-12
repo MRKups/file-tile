@@ -8,7 +8,7 @@ use crate::domain::FolderBox;
 
 use crate::{
     Message, ViewPresentation, boxes::file_list, boxes::folder_status, boxes::navigation_header,
-    boxes::tab_rail, canvas::geometry::CanvasGeometry, widgets::retained_view,
+    boxes::sidebar, boxes::tab_rail, canvas::geometry::CanvasGeometry, widgets::retained_view,
     window::appearance as a,
 };
 
@@ -44,6 +44,11 @@ pub struct Props<'a> {
     pub tab_error: Option<&'a str>,
     pub opening_status: Option<&'a str>,
     pub dragged_tab: Option<crate::domain::ViewId>,
+    pub pinned_folders: &'a [std::path::PathBuf],
+    pub ungranted_pins: &'a std::collections::BTreeSet<std::path::PathBuf>,
+    pub locations: &'a [crate::platform::volumes::DetectedLocation],
+    pub safety_policy: crate::domain::SafetyPolicy,
+    pub dragged_pin: Option<usize>,
     pub sort_open: bool,
     pub dragging: Option<&'a std::collections::HashSet<std::path::PathBuf>>,
     pub column_preview: Option<&'a crate::boxes::file_columns::ViewPreview>,
@@ -86,7 +91,7 @@ pub(crate) fn scroller_geometry_with_settings(
 ) -> ScrollerGeometry {
     let ty = geometry.typography;
     let box_rect = geometry.rect(item.rect);
-    let rail_width = tab_rail::width(item, box_rect.width);
+    let rail_width = sidebar::left_rail_width(item, settings, box_rect.width);
     let pane_width = (box_rect.width - rail_width).max(1.0);
     let pane_height = box_rect.height;
     let compact = is_compact(pane_width, pane_height, settings, ty)
@@ -134,7 +139,7 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
     let window_palette = props.window_palette;
     let active = props.item.active_view();
     let box_rect = props.geometry.rect(props.item.rect);
-    let rail_width = tab_rail::width(props.item, box_rect.width);
+    let rail_width = sidebar::rail_width(props.item, box_rect.width);
     let rect = Rectangle {
         x: box_rect.x + rail_width,
         width: (box_rect.width - rail_width).max(1.0),
@@ -222,7 +227,7 @@ fn with_tab_rail<'a>(
     width: f32,
     body: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let rail: Element<'a, Message> = if width > 0.0 {
+    let rail: Element<'a, Message> = if width > 0.0 && props.item.has_visible_tabs() {
         tab_rail::view(tab_rail::Props {
             palette: props.palette,
             item: props.item,
@@ -231,6 +236,20 @@ fn with_tab_rail<'a>(
             interactive: props.tabs_input,
             width,
             dragged: props.dragged_tab,
+        })
+    } else if width > 0.0 && props.item.has_sidebar() {
+        sidebar::view(sidebar::Props {
+            palette: props.palette,
+            item: props.item,
+            home: props.home,
+            pinned: props.pinned_folders,
+            ungranted_pins: props.ungranted_pins,
+            locations: props.locations,
+            safety_policy: props.safety_policy.clone(),
+            mode: props.mode,
+            interactive: props.tabs_input,
+            width,
+            dragged_pin: props.dragged_pin,
         })
     } else {
         space().width(0).into()

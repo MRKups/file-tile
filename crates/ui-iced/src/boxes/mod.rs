@@ -8,5 +8,6 @@ pub(crate) mod folder_status;
 pub(crate) mod launchers;
 pub(crate) mod navigation_header;
 pub(crate) mod scroll_position;
+pub(crate) mod sidebar;
 pub(crate) mod tab_drag;
 pub(crate) mod tab_rail;

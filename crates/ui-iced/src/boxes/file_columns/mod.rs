@@ -317,7 +317,7 @@ fn right_pane<'a>(
                     props.interactive,
                     palette,
                 ),
-                preview::folder_preview(props, allowed, column_preview),
+                preview::folder_preview(props, allowed, entry.dataless, column_preview),
             )
         }
         (_, Some(entry)) => (

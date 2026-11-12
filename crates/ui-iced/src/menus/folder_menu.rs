@@ -16,6 +16,7 @@ pub(crate) enum Command {
     Back,
     New(CreateKind),
     CopyPath,
+    TogglePin,
 }
 pub(crate) struct Menu {
     pub generation: u64,
@@ -136,7 +137,7 @@ impl Desktop {
         let view = menu.view;
         let directory = menu.listing.directory.clone();
         let anchor = menu_bounds(self, menu).position();
-        if !matches!(command, Command::CopyPath)
+        if !matches!(command, Command::CopyPath | Command::TogglePin)
             && !self.application.can_write_folder(view, &directory)
         {
             return Task::none();
@@ -153,6 +154,18 @@ impl Desktop {
                         crate::platform::clipboard::copy_text(value).err();
                 }
                 Task::none()
+            }
+            Command::TogglePin => {
+                if self.application.is_pinned_folder(&directory) {
+                    self.dispatch(crate::application::Action::UnpinFolder(directory))
+                } else if self.application.can_pin_folder(&directory) {
+                    self.dispatch(crate::application::Action::PinFolder {
+                        path: directory,
+                        index: None,
+                    })
+                } else {
+                    Task::none()
+                }
             }
             Command::Create | Command::Back => Task::none(),
         }
@@ -210,37 +223,7 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
         )
     };
     let mut contents = if menu.create {
-        let mut contents = column![item(
-            "folder-menu-back",
-            Icon::Back,
-            "Back",
-            Command::Back,
-            true
-        )];
-        for (kind, id) in CreateKind::ALL.into_iter().zip([
-            "create-folder",
-            "create-text",
-            "create-markdown",
-            "create-json",
-        ]) {
-            contents = contents.push(context_menu::item_with_suffix(
-                id,
-                format!("{id}-icon"),
-                if kind == CreateKind::Folder {
-                    Icon::Folder
-                } else {
-                    Icon::Document
-                },
-                kind.label(),
-                kind.dot_extension(),
-                writable.then_some(Message::FolderMenuAction(
-                    menu.generation,
-                    Command::New(kind),
-                )),
-                palette,
-            ));
-        }
-        contents
+        create_menu_contents(menu.generation, writable, palette)
     } else {
         column![
             item(
@@ -271,6 +254,20 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
                 "Copy path",
                 Command::CopyPath,
                 menu.listing.directory.to_str().is_some()
+            ),
+            item(
+                "folder-menu-pin",
+                Icon::Pin,
+                if desktop
+                    .application
+                    .is_pinned_folder(&menu.listing.directory)
+                {
+                    "Unpin from sidebar"
+                } else {
+                    "Pin to sidebar"
+                },
+                Command::TogglePin,
+                desktop.application.can_pin_folder(&menu.listing.directory)
             )
         ]
     };
@@ -288,14 +285,50 @@ pub(crate) fn view(desktop: &Desktop) -> Element<'_, Message> {
     )
 }
 
+fn create_menu_contents(
+    generation: u64,
+    writable: bool,
+    palette: crate::window::appearance::Palette,
+) -> iced::widget::Column<'static, Message> {
+    let mut contents = column![context_menu::item(
+        "folder-menu-back",
+        "folder-menu-back-icon",
+        Icon::Back,
+        "Back",
+        Some(Message::FolderMenuAction(generation, Command::Back)),
+        palette,
+    )];
+    for (kind, id) in CreateKind::ALL.into_iter().zip([
+        "create-folder",
+        "create-text",
+        "create-markdown",
+        "create-json",
+    ]) {
+        contents = contents.push(context_menu::item_with_suffix(
+            id,
+            format!("{id}-icon"),
+            if kind == CreateKind::Folder {
+                Icon::Folder
+            } else {
+                Icon::Document
+            },
+            kind.label(),
+            kind.dot_extension(),
+            writable.then_some(Message::FolderMenuAction(generation, Command::New(kind))),
+            palette,
+        ));
+    }
+    contents
+}
+
 fn menu_bounds(desktop: &Desktop, menu: &Menu) -> iced::Rectangle {
     let ty = crate::window::typography::Style(desktop.application.typography());
     let writable = desktop
         .application
         .can_write_folder(menu.view, &menu.listing.directory);
     let height = 12.0
-        + ty.row(context_menu::ROW_HEIGHT) * if menu.create { 5.0 } else { 4.0 }
+        + ty.row(context_menu::ROW_HEIGHT) * 5.0
         + if menu.create { 0.0 } else { 9.0 }
-        + if writable { 0.0 } else { ty.row(48.0) };
-    context_menu::bounds(menu.position, desktop.size, ty.row(210.0), height)
+        + if writable { 0.0 } else { ty.row(76.0) };
+    context_menu::bounds(menu.position, desktop.size, ty.row(225.0), height)
 }

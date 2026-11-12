@@ -133,6 +133,9 @@ pub(super) fn at_point(message: Message, point: Point) -> Message {
             Message::OpenEntryMenu(view, path, Some(point))
         }
         Message::OpenTabMenu(id, view, Some(_)) => Message::OpenTabMenu(id, view, Some(point)),
+        Message::OpenSidebarMenu(id, path, Some(_)) => {
+            Message::OpenSidebarMenu(id, path, Some(point))
+        }
         message => message,
     }
 }
@@ -141,6 +144,7 @@ pub(super) fn dismissal_identity(message: &Message) -> Option<super::Identity> {
     match message {
         Message::DismissEntryMenu(generation) => Some(super::Identity::Entry(*generation)),
         Message::DismissTabMenu(generation) => Some(super::Identity::Tab(*generation)),
+        Message::DismissSidebarMenu(generation) => Some(super::Identity::Sidebar(*generation)),
         Message::DismissFolderMenu(generation) => Some(super::Identity::Folder(*generation)),
         _ => None,
     }

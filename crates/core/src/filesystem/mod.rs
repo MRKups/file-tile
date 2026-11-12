@@ -1,5 +1,7 @@
 //! Directory adapters. Native reads use `std::fs`; no engine stack is imported.
 
+mod locations;
+pub use locations::LocationWorkers;
 mod metadata;
 mod preview;
 mod webp_header;

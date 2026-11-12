@@ -14,6 +14,33 @@ const MAX_DIR_ENTRIES: usize = 512;
 const MAX_FILE_SIZE: u64 = 256 * 1024;
 const MAX_READ_BYTES: usize = 16 * 1024;
 
+#[cfg(target_os = "macos")]
+pub(crate) fn is_dataless(metadata: &std::fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    (metadata.st_flags() & 0x4000_0000) != 0
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn is_dataless(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn is_dataless_path(path: &Path) -> bool {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if is_dataless(&meta) {
+        return true;
+    }
+    meta.file_type().is_symlink() && fs::metadata(path).is_ok_and(|target| is_dataless(&target))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn is_dataless_path(_path: &Path) -> bool {
+    false
+}
+
 #[derive(Debug, Clone)]
 pub struct DirSnapshot {
     path: PathBuf,
@@ -25,7 +52,9 @@ impl DirSnapshot {
     pub fn capture(path: PathBuf) -> Self {
         let mut files = Vec::new();
         let mut dirs = Vec::new();
-        if let Ok(entries) = fs::read_dir(&path) {
+        if !is_dataless_path(&path)
+            && let Ok(entries) = fs::read_dir(&path)
+        {
             for entry in entries.take(MAX_DIR_ENTRIES).flatten() {
                 let raw_name = entry.file_name();
                 let Some(name) = raw_name.to_str() else {
@@ -39,12 +68,10 @@ impl DirSnapshot {
                 } else if ft.is_dir() {
                     dirs.push(name.to_owned());
                 } else if ft.is_symlink() {
-                    if let Ok(meta) = fs::metadata(entry.path()) {
-                        if meta.is_dir() {
-                            dirs.push(name.to_owned());
-                        } else {
-                            files.push(name.to_owned());
-                        }
+                    if let Ok(meta) = fs::metadata(entry.path())
+                        && meta.is_dir()
+                    {
+                        dirs.push(name.to_owned());
                     } else {
                         files.push(name.to_owned());
                     }
@@ -97,7 +124,7 @@ impl DirSnapshot {
 
     pub fn read_bounded(&self, rel: &str) -> Option<String> {
         if let Some((top, _)) = rel.split_once('/') {
-            if !self.has_dir(top) {
+            if !self.has_dir(top) || is_dataless_path(&self.path.join(top)) {
                 return None;
             }
         } else if !self.has_file(rel) {
@@ -132,6 +159,9 @@ pub fn ancestors(directory: &Path) -> Vec<DirSnapshot> {
 }
 
 fn is_boundary(path: &Path) -> bool {
+    if path.ends_with("Library/CloudStorage") || path.ends_with("Library/Mobile Documents") {
+        return true;
+    }
     let Some(raw) = path.to_str() else {
         return false;
     };
@@ -142,16 +172,25 @@ fn is_boundary(path: &Path) -> bool {
 }
 
 pub fn has_file_on_disk(directory: &Path, name: &str) -> bool {
-    fs::metadata(directory.join(name)).is_ok_and(|meta| meta.is_file())
+    let target = directory.join(name);
+    !is_dataless_path(directory)
+        && !target
+            .parent()
+            .is_some_and(|parent| parent != directory && is_dataless_path(parent))
+        && fs::metadata(target).is_ok_and(|meta| meta.is_file())
 }
 
 pub fn has_dir_on_disk(directory: &Path, name: &str) -> bool {
-    fs::metadata(directory.join(name)).is_ok_and(|meta| meta.is_dir())
+    !is_dataless_path(directory)
+        && fs::metadata(directory.join(name)).is_ok_and(|meta| meta.is_dir() && !is_dataless(&meta))
 }
 
 pub fn read_bounded_path(path: &Path) -> Option<String> {
+    if path.parent().is_some_and(is_dataless_path) {
+        return None;
+    }
     let meta = fs::metadata(path).ok()?;
-    if !meta.is_file() || meta.len() > MAX_FILE_SIZE {
+    if is_dataless(&meta) || !meta.is_file() || meta.len() > MAX_FILE_SIZE {
         return None;
     }
     let file = fs::File::open(path).ok()?;

@@ -46,7 +46,10 @@ use dialogs::{
     about, app_settings, box_settings, diagnostics as diagnostics_dialog, folder_picker,
     range_editor, storage_dialog, updates, workspace_management,
 };
-use menus::{context_menu, entry_menu, file_actions, file_drag, folder_menu, sort_menu, tab_menu};
+use menus::{
+    context_menu, entry_menu, file_actions, file_drag, folder_menu, sidebar_menu, sort_menu,
+    tab_menu,
+};
 use runtime::{
     folder_usage, input::WindowDrag, launch, metadata, native_menu, opening, sorting, startup,
     thumbnails,
@@ -97,6 +100,9 @@ enum Message {
     OpenTabMenu(crate::domain::BoxId, ViewId, Option<Point>),
     DismissTabMenu(u64),
     CloseMenuTab(u64),
+    OpenSidebarMenu(crate::domain::BoxId, PathBuf, Option<Point>),
+    DismissSidebarMenu(u64),
+    UnpinSidebarMenu(u64),
     OpenEntryMenu(ViewId, PathBuf, Option<Point>),
     OpenFolderMenu(ViewId, Point),
     OpenPreviewFolderMenu(ViewId, Point),
@@ -125,6 +131,9 @@ enum Message {
     BeginTabDrag(crate::domain::BoxId, ViewId, Point),
     MoveTabDrag(Point),
     FinishTabDrag,
+    SidebarScrolled(crate::domain::BoxId, f32),
+    SidebarPinPressed(crate::domain::BoxId, usize, PathBuf),
+    SidebarLocationActivated(crate::domain::BoxId, PathBuf),
     Action(Action),
     Input(Event, Status),
     WindowEvent(iced_window::Id, iced_window::Event),
@@ -275,12 +284,16 @@ struct Desktop {
     native_menu: native_menu::Runtime,
     tab_menu: Option<tab_menu::Menu>,
     next_tab_menu_generation: u64,
+    sidebar_menu: Option<sidebar_menu::Menu>,
+    next_sidebar_menu_generation: u64,
     entry_menu: Option<entry_menu::Menu>,
     next_entry_menu_generation: u64,
     folder_menu: Option<folder_menu::Menu>,
     next_folder_menu_generation: u64,
     open_workers: Option<Arc<crate::filesystem::OpenWorkers>>,
     pending_open: Option<opening::Pending>,
+    location_workers: Option<Arc<crate::filesystem::LocationWorkers>>,
+    pending_locations: Option<startup::PendingLocations>,
     metadata_workers: Option<Arc<crate::filesystem::MetadataWorkers>>,
     metadata_reads: HashMap<ViewId, metadata::Pending>,
     configuration_reads: HashMap<u64, PendingRead>,
@@ -309,6 +322,8 @@ struct Desktop {
     box_settings: Option<box_settings::Draft>,
     tab_offsets: HashMap<crate::domain::BoxId, f32>,
     tab_drag: Option<tab_drag::Drag>,
+    sidebar_offsets: HashMap<crate::domain::BoxId, f32>,
+    sidebar_drag: Option<boxes::sidebar::drag::Drag>,
     file_drag: file_drag::State,
     type_jump: runtime::type_jump::State,
     edit_anchor: Option<editing::Anchor>,
@@ -346,12 +361,16 @@ impl Desktop {
             native_menu: native_menu::Runtime::default(),
             tab_menu: None,
             next_tab_menu_generation: 0,
+            sidebar_menu: None,
+            next_sidebar_menu_generation: 0,
             entry_menu: None,
             next_entry_menu_generation: 0,
             folder_menu: None,
             next_folder_menu_generation: 0,
             open_workers: None,
             pending_open: None,
+            location_workers: None,
+            pending_locations: None,
             metadata_workers: None,
             metadata_reads: HashMap::new(),
             configuration_reads: HashMap::new(),
@@ -381,6 +400,8 @@ impl Desktop {
             box_settings: None,
             tab_offsets: HashMap::new(),
             tab_drag: None,
+            sidebar_offsets: HashMap::new(),
+            sidebar_drag: None,
             file_drag: file_drag::State::default(),
             type_jump: runtime::type_jump::State::default(),
             edit_anchor: None,
@@ -428,6 +449,7 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
     let file_worker = Arc::new(crate::filesystem::file_operations::FileOperationWorker::new()?);
     let thumbnail_workers = Arc::new(crate::filesystem::PreviewWorkers::new()?);
     let usage_workers = Arc::new(crate::filesystem::folder_usage::UsageWorkers::new()?);
+    let location_workers = Arc::new(crate::filesystem::LocationWorkers::new()?);
     let boot = move || {
         let (mut desktop, task) =
             startup::boot(&launch, DirectoryBackend::Native(Arc::clone(&workers)));
@@ -435,12 +457,18 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
         desktop.sort_runtime.workers = Some(Arc::clone(&sort_workers));
         desktop.usage_runtime.workers = Some(Arc::clone(&usage_workers));
         desktop.open_workers = Some(Arc::clone(&open_workers));
+        desktop.location_workers = Some(Arc::clone(&location_workers));
         desktop.file_worker = Some(Arc::clone(&file_worker));
         desktop.thumbnails.workers = Some(Arc::clone(&thumbnail_workers));
         desktop.system_font = system_font.clone();
+        let locations_task = desktop.dispatch(Action::RefreshLocations);
         (
             desktop,
-            Task::batch([task, iced::system::theme().map(Message::SystemThemeChanged)]),
+            Task::batch([
+                task,
+                locations_task,
+                iced::system::theme().map(Message::SystemThemeChanged),
+            ]),
         )
     };
     iced::application(boot, Desktop::update, Desktop::view)
@@ -684,6 +712,9 @@ impl Desktop {
             message @ (Message::OpenTabMenu(..)
             | Message::DismissTabMenu(_)
             | Message::CloseMenuTab(_)
+            | Message::OpenSidebarMenu(..)
+            | Message::DismissSidebarMenu(_)
+            | Message::UnpinSidebarMenu(_)
             | Message::OpenEntryMenu(..)
             | Message::OpenFolderMenu(..)
             | Message::OpenPreviewFolderMenu(..)
@@ -706,6 +737,9 @@ impl Desktop {
             | Message::FinishTabDrag
             | Message::TabRailScrolled(..)
             | Message::FocusTab(_)) => self.tab_message(message),
+            message @ (Message::SidebarScrolled(..)
+            | Message::SidebarPinPressed(..)
+            | Message::SidebarLocationActivated(..)) => self.sidebar_message(message),
             Message::FolderChanges(batch) => self.folder_changes(batch),
             message @ (Message::LayoutPressed { .. }
             | Message::LayoutPointerMoved(_)
@@ -819,7 +853,11 @@ impl Desktop {
             _ => None,
         };
         let completed_view = self.listing_completion_context(&action);
+        let locations_updated = matches!(action, Action::LocationsLoaded { .. });
         effects.extend(self.application.update(action));
+        if locations_updated {
+            self.sync_app_settings_locations();
+        }
         let switched = epoch_before != self.application.workspace_epoch() && !restored;
         if switched {
             self.clear_workspace_context();
@@ -920,6 +958,8 @@ impl Desktop {
         self.launchers = launchers::Runtime::default();
         self.box_settings = None;
         self.tab_drag = None;
+        self.sidebar_offsets.clear();
+        self.sidebar_drag = None;
         self.file_drag.clear();
         self.edit_anchor = None;
     }
@@ -947,6 +987,7 @@ impl Desktop {
         }
         if closing {
             self.pending_reads.clear();
+            self.pending_locations = None;
             self.column_previews.clear_pending();
         }
         self.sync_configuration_dialogs(restored, new_save_failure);
@@ -992,6 +1033,7 @@ impl Desktop {
             self.window_drag = WindowDrag::Idle;
             self.cancel_card_drag();
             self.tab_drag = None;
+            self.sidebar_drag = None;
             self.file_drag.clear();
         }
     }

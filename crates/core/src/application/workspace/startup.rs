@@ -99,6 +99,7 @@ impl Application {
             return Vec::new();
         }
         self.workspace = loaded.active.workspace.snapshot();
+        self.pinned_folders = loaded.preferences.pinned_folders.clone();
         self.configuration = Some((loaded.preferences, loaded.index));
         self.user_themes = loaded.user_themes;
         self.user_themes_edited = false;
@@ -145,7 +146,9 @@ impl Application {
                 loaded.backup,
             )
         };
-        self.schedule_restore_reads()
+        let mut effects = self.schedule_restore_reads();
+        effects.extend(self.refresh_locations());
+        effects
     }
 
     pub(in crate::application) fn startup_failed(&mut self, error: StorageFailure) {

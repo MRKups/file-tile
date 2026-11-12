@@ -38,6 +38,7 @@ pub struct WatchUpdate {
 #[derive(Debug, Clone, Default)]
 pub struct WatchBatch {
     pub updates: Vec<WatchUpdate>,
+    pub locations_changed: bool,
 }
 
 #[derive(Debug)]
@@ -148,7 +149,8 @@ impl Application {
         }
     }
 
-    pub(in crate::application) fn watch_completed(&mut self, batch: WatchBatch) {
+    pub(in crate::application) fn watch_completed(&mut self, batch: WatchBatch) -> bool {
+        let locations_changed = batch.locations_changed;
         let mut stale = 0;
         let count = batch.updates.len() as u64;
         session().record(
@@ -191,6 +193,7 @@ impl Application {
                 None,
             );
         }
+        locations_changed
     }
 
     pub(in crate::application) fn reload_all(&mut self) {
@@ -212,7 +215,13 @@ impl Application {
             })
             .collect();
         for target in targets {
-            self.demand_folder_usage(target.directory.clone(), std::time::Instant::now());
+            let measurable = self
+                .load(target.view)
+                .and_then(crate::application::LoadState::listing)
+                .is_none_or(|listing| listing.is_measurable());
+            if measurable {
+                self.demand_folder_usage(target.directory.clone(), std::time::Instant::now());
+            }
             self.enqueue_reload(target);
         }
     }

@@ -66,7 +66,10 @@ pub(crate) fn view<'a>(
     }
     let rows = tree.rows();
     let row_height = ty.row(ROW_HEIGHT);
-    let first = (draft.tree_offset / row_height).floor().max(0.0) as usize;
+    let tree_height = (draft.bounds(desktop).height - 620.0).clamp(180.0, 460.0);
+    let max_offset = (rows.len() as f32 * row_height - tree_height).max(0.0);
+    let offset = draft.tree_offset.clamp(0.0, max_offset);
+    let first = (offset / row_height).floor().max(0.0) as usize;
     let start = first.saturating_sub(3).min(rows.len());
     let end = first.saturating_add(17).min(rows.len());
     let mut contents = column![space().height(start as f32 * row_height)].width(Fill);
@@ -81,7 +84,7 @@ pub(crate) fn view<'a>(
         ..iced::Padding::ZERO
     }))
     .id("folder-selection-tree")
-    .height((draft.bounds(desktop).height - 620.0).clamp(180.0, 460.0))
+    .height(tree_height)
     .direction(scrollable::Direction::Vertical(a::scrollbar()))
     .style(palette.scrollable())
     .on_scroll(move |viewport| Message::TreeScrolled(view, viewport.absolute_offset().y));
@@ -137,16 +140,7 @@ fn tree_row<'a>(
     let palette = desktop.configure_palette();
     let ty = palette.typography;
     let expand = disclosure(view, path, node.expanded, palette);
-    let label = if path == desktop.application.home() {
-        "Home".into()
-    } else if path == std::path::Path::new("/") {
-        "Computer".into()
-    } else {
-        path.file_name()
-            .unwrap_or(path.as_os_str())
-            .to_string_lossy()
-            .into_owned()
-    };
+    let (label, icon) = row_label_and_icon(desktop, view, path);
     let scope = desktop
         .application
         .workspace()
@@ -197,7 +191,7 @@ fn tree_row<'a>(
         focus_control::themed(
             format!("tree-select-{path:?}"),
             action.clone(),
-            button(folder_label(label, color, path, start, stop, palette))
+            button(folder_label(label, icon, color, path, start, stop, palette))
                 .padding(3)
                 .width(Fill)
                 .style(move |_, status| palette.text_button(status))
@@ -205,7 +199,7 @@ fn tree_row<'a>(
             palette,
         )
     } else {
-        folder_label(label, palette.muted, path, start, stop, palette)
+        folder_label(label, icon, palette.muted, path, start, stop, palette)
     };
     let mut row = row![expand, select]
         .height(ty.row(ROW_HEIGHT))
@@ -229,8 +223,41 @@ fn tree_row<'a>(
         .into()
 }
 
+fn row_label_and_icon(
+    desktop: &Desktop,
+    view: ViewId,
+    path: &std::path::Path,
+) -> (String, crate::window::icons::Icon) {
+    let root_meta = desktop
+        .application
+        .folder_tree()
+        .filter(|tree| tree.view == view)
+        .and_then(|tree| tree.root_meta(path));
+    if path == desktop.application.home() {
+        ("Home".into(), crate::window::icons::Icon::Home)
+    } else if let Some(meta) = root_meta {
+        (
+            meta.label.clone(),
+            crate::boxes::sidebar::location_icon(&meta.kind),
+        )
+    } else if path == std::path::Path::new("/") {
+        ("Computer".into(), crate::window::icons::Icon::Drive)
+    } else if path == std::path::Path::new("/Volumes") {
+        ("Volumes".into(), crate::window::icons::Icon::Drive)
+    } else {
+        (
+            path.file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+            crate::window::icons::Icon::Folder,
+        )
+    }
+}
+
 fn folder_label(
     label: String,
+    icon: crate::window::icons::Icon,
     color: iced::Color,
     path: &std::path::Path,
     start: bool,
@@ -239,7 +266,7 @@ fn folder_label(
 ) -> Element<'static, Message> {
     let ty = palette.typography;
     let mut contents = row![
-        crate::window::icons::view(crate::window::icons::Icon::Folder, 13.0, Some(color), 1.0),
+        crate::window::icons::view(icon, 13.0, Some(color), 1.0),
         ty.small(label)
             .color(color)
             .wrapping(text::Wrapping::None)

@@ -17,6 +17,7 @@ pub(crate) const SURFACE_PADDING: f32 = 6.0;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Identity {
     Tab(u64),
+    Sidebar(u64),
     Entry(u64),
     Folder(u64),
 }
@@ -36,6 +37,7 @@ pub(crate) fn opening_focus(point: Option<Point>, first: &'static str) -> &'stat
 impl Desktop {
     pub(crate) fn context_menu_open(&self) -> bool {
         self.tab_menu.is_some()
+            || self.sidebar_menu.is_some()
             || self.entry_menu.is_some()
             || self.folder_menu.is_some()
             || self.sort_menu.is_some()
@@ -54,12 +56,14 @@ impl Desktop {
             draft.range.focused = None;
         }
         self.cancel_card_drag();
+        self.sidebar_drag = None;
         self.file_drag.clear();
     }
 
     pub(crate) fn clear_context_menus(&mut self) {
         self.sort_menu = None;
         self.tab_menu = None;
+        self.sidebar_menu = None;
         self.entry_menu = None;
         self.folder_menu = None;
     }
@@ -67,6 +71,7 @@ impl Desktop {
     pub(crate) fn reconcile_context_menus(&mut self) {
         self.reconcile_sort_menu();
         self.reconcile_tab_menu();
+        self.reconcile_sidebar_menu();
         self.reconcile_entry_menu();
         if self
             .folder_menu
@@ -99,6 +104,9 @@ impl Desktop {
             Message::OpenTabMenu(id, view, point) => self.open_tab_menu(id, view, point),
             Message::DismissTabMenu(generation) => self.dismiss_tab_menu(generation),
             Message::CloseMenuTab(generation) => self.close_menu_tab(generation),
+            Message::OpenSidebarMenu(id, path, point) => self.open_sidebar_menu(id, path, point),
+            Message::DismissSidebarMenu(generation) => self.dismiss_sidebar_menu(generation),
+            Message::UnpinSidebarMenu(generation) => self.unpin_sidebar_menu(generation),
             Message::OpenEntryMenu(view, path, point) => self.open_entry_menu(view, path, point),
             Message::DismissEntryMenu(generation) => self.dismiss_entry_menu(generation),
             Message::EntryMenuAction(generation, action) => {
@@ -125,6 +133,10 @@ impl Desktop {
                 .tab_menu
                 .as_ref()
                 .is_some_and(|menu| menu.generation == generation),
+            Identity::Sidebar(generation) => self
+                .sidebar_menu
+                .as_ref()
+                .is_some_and(|menu| menu.generation == generation),
             Identity::Entry(generation) => self
                 .entry_menu
                 .as_ref()
@@ -138,6 +150,7 @@ impl Desktop {
             match *target {
                 message @ (Message::OpenEntryMenu(..)
                 | Message::OpenTabMenu(..)
+                | Message::OpenSidebarMenu(..)
                 | Message::OpenFolderMenu(..)
                 | Message::OpenPreviewFolderMenu(..)) => self.context_menu_message(message),
                 _ => Task::none(),
@@ -148,6 +161,7 @@ impl Desktop {
                     self.context_menu_message(Message::DismissFolderMenu(generation))
                 }
                 Identity::Tab(generation) => self.dismiss_tab_menu(generation),
+                Identity::Sidebar(generation) => self.dismiss_sidebar_menu(generation),
                 Identity::Entry(generation) => self.dismiss_entry_menu(generation),
             }
         }

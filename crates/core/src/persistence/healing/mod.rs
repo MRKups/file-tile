@@ -21,9 +21,15 @@ pub enum ConfigHealingScenario {
     /// Invalid field in `safety` block in `preferences.json` reset to safe
     /// defaults without locking workspace autosave.
     MalformedSafetyPreferences,
+    /// Invalid `pinned_folders` field or entries in `preferences.json` pruned or
+    /// reset to application defaults without locking workspace autosave.
+    MalformedPinnedFolders,
     /// Invalid `top_item` field on a view record in `workspace-<UUID>.json`
     /// reset to `0` without locking workspace autosave.
     MalformedViewTopItem,
+    /// Invalid or conflicting `sidebar` setting on a box record in
+    /// `workspace-<UUID>.json` reset to `false` without locking workspace autosave.
+    MalformedBoxSidebar,
     /// Referenced active `workspace-<UUID>.json` was deleted on disk while
     /// another valid workspace exists in `workspaces.json`.
     MissingActiveWorkspaceFallback,
@@ -39,7 +45,9 @@ impl ConfigHealingScenario {
             Self::OrphanedTemporaryFiles => "orphaned_temporary_files",
             Self::MalformedCapabilitiesPreferences => "malformed_capabilities_preferences",
             Self::MalformedSafetyPreferences => "malformed_safety_preferences",
+            Self::MalformedPinnedFolders => "malformed_pinned_folders",
             Self::MalformedViewTopItem => "malformed_view_top_item",
+            Self::MalformedBoxSidebar => "malformed_box_sidebar",
             Self::MissingActiveWorkspaceFallback => "missing_active_workspace_fallback",
             Self::EmptyWorkspaceRecreation => "empty_workspace_recreation",
         }

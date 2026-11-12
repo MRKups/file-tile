@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
+pub mod volumes;
+
 pub type DisplayBounds = ((f32, f32, f32, f32), (f32, f32, f32, f32));
 pub type PathChoice = Pin<Box<dyn Future<Output = Result<Option<PathBuf>, String>> + Send>>;
 
@@ -297,8 +299,16 @@ pub mod permissions {
         PermissionStatus::Unavailable
     }
 
+    pub fn check_path_access(_path: &Path) -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+
     pub fn check_folder_access(_folder_name: Option<&str>, _home: &Path) -> PermissionStatus {
         PermissionStatus::Granted
+    }
+
+    pub fn request_path_access(_path: &Path) -> PermissionStatus {
+        PermissionStatus::Unavailable
     }
 
     pub fn request_folder_access(_folder_name: Option<&str>, _home: &Path) -> PermissionStatus {

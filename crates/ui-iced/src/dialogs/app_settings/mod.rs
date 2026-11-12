@@ -171,6 +171,9 @@ impl Desktop {
                     | Action::Escape
                     | Action::Navigate(..)
                     | Action::ReloadAll
+                    | Action::PinFolder { .. }
+                    | Action::UnpinFolder(_)
+                    | Action::ReorderPinnedFolder { .. }
                     | Action::ConfigureBox(_)
                     | Action::SetBoxSetting(..)
                     | Action::SetSort(..)
@@ -223,10 +226,14 @@ impl Desktop {
             Message::AppAccessSafetyEdited(edit) => {
                 let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
                 let home = self.application.home().to_path_buf();
+                let mut refresh = false;
                 if let Some(draft) = &mut self.app_settings {
-                    draft
+                    refresh = draft
                         .access_safety
                         .apply(edit, &mut draft.safety, &home, probe_os);
+                }
+                if refresh {
+                    return self.dispatch(Action::RefreshLocations);
                 }
                 Task::none()
             }
@@ -323,7 +330,7 @@ impl Desktop {
         };
         let focus = draft.return_focus;
         let typography = draft.typography;
-        let safety = draft.safety;
+        let safety = draft.safety.clone();
         let capabilities = draft.capabilities;
         let task = self.dispatch(Action::ApplyAppSettings {
             new_box_folder: folder,
@@ -337,6 +344,24 @@ impl Desktop {
             return Task::batch([task, self.restore_workspace_focus(focus)]);
         }
         Task::batch([task, iced::advanced::widget::operate(focus::reveal())])
+    }
+
+    pub(crate) fn sync_app_settings_locations(&mut self) {
+        let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
+        if let Some(draft) = &mut self.app_settings {
+            draft
+                .access_safety
+                .sync_locations(&self.application, &draft.safety, probe_os);
+        }
+    }
+
+    pub(crate) fn reprobe_app_settings_on_focus(&mut self) {
+        let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
+        if let Some(draft) = &mut self.app_settings {
+            draft
+                .access_safety
+                .reprobe_on_focus(&self.application, &draft.safety, probe_os);
+        }
     }
 
     fn take_settings_focus(&mut self) -> Option<ViewId> {
@@ -644,6 +669,7 @@ pub(crate) mod tests {
                         last_workspace_id: Some(id),
                         window: None,
                         new_box_folder: folder,
+                        pinned_folders: None,
                         appearance: Default::default(),
                         typography: Default::default(),
                         safety: Default::default(),

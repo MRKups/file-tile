@@ -127,15 +127,38 @@ impl Application {
         let Some(item) = self.workspace.view(view) else {
             return vec![];
         };
+        let policy = self.safety_policy(Some(view));
         let preview = self.valid_column_preview(view).cloned();
         let mut seen = HashSet::new();
         let demand: Vec<_> = paths
             .iter()
             .filter(|path| {
-                listing
+                let Some((owner, entry)) = listing
                     .entry(path)
-                    .or_else(|| preview.as_deref().and_then(|sub| sub.entry(path)))
-                    .is_some_and(|entry| item.settings.show_hidden || !entry.hidden)
+                    .map(|entry| (listing.as_ref(), entry))
+                    .or_else(|| {
+                        preview
+                            .as_deref()
+                            .and_then(|sub| sub.entry(path).map(|entry| (sub, entry)))
+                    })
+                else {
+                    return false;
+                };
+                if !item.settings.show_hidden && entry.hidden {
+                    return false;
+                }
+                if entry.kind == crate::application::contracts::directory::EntryKind::Directory {
+                    if policy.check_read_directory(&entry.path).is_err() {
+                        return false;
+                    }
+                    if owner
+                        .entry_target(entry)
+                        .is_some_and(|target| policy.check_read_directory(target).is_err())
+                    {
+                        return false;
+                    }
+                }
+                true
             })
             .filter(|path| seen.insert(path.as_path()))
             .cloned()

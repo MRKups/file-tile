@@ -56,7 +56,7 @@ pub(crate) fn view<'a>(desktop: &'a Desktop, draft: &'a Draft) -> Element<'a, Me
             logs
         ),
         super::capabilities::view(draft.capabilities, width, palette),
-        super::access_safety::view(draft.safety, &draft.access_safety, width, palette),
+        super::access_safety::view(&draft.safety, &draft.access_safety, width, palette),
     ]
     .spacing(64)
     .width(width);

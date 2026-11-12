@@ -33,6 +33,11 @@ pub enum Icon {
     Github,
     Scissors,
     Info,
+    Cloud,
+    Drive,
+    Network,
+    Pin,
+    Lock,
 }
 
 impl Icon {
@@ -82,11 +87,16 @@ impl Icon {
             Self::Github => include_bytes!("../../../../assets/icons/ui/github.svg"),
             Self::Scissors => include_bytes!("../../../../assets/icons/ui/scissors.svg"),
             Self::Info => include_bytes!("../../../../assets/icons/ui/info.svg"),
+            Self::Cloud => include_bytes!("../../../../assets/icons/ui/cloud.svg"),
+            Self::Drive => include_bytes!("../../../../assets/icons/ui/drive.svg"),
+            Self::Network => include_bytes!("../../../../assets/icons/ui/network.svg"),
+            Self::Pin => include_bytes!("../../../../assets/icons/ui/pin.svg"),
+            Self::Lock => include_bytes!("../../../../assets/icons/ui/lock.svg"),
         }
     }
 
     fn handle(self) -> Handle {
-        static HANDLES: OnceLock<[Handle; 24]> = OnceLock::new();
+        static HANDLES: OnceLock<[Handle; 29]> = OnceLock::new();
         HANDLES.get_or_init(|| {
             [
                 Self::Eye,
@@ -113,6 +123,11 @@ impl Icon {
                 Self::Github,
                 Self::Scissors,
                 Self::Info,
+                Self::Cloud,
+                Self::Drive,
+                Self::Network,
+                Self::Pin,
+                Self::Lock,
             ]
             .map(|icon| Handle::from_memory(icon.bytes()))
         })[self as usize]

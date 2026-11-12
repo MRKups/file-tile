@@ -155,11 +155,26 @@ impl Application {
         let prohibit_delete = view
             .and_then(|view| self.workspace.view(view))
             .is_some_and(|view| view.settings.prohibit_delete);
+        let mut external_drive_roots = Vec::new();
+        let mut network_share_roots = Vec::new();
+        for loc in &self.locations {
+            match loc.kind {
+                crate::platform::volumes::LocationKind::ExternalDrive => {
+                    external_drive_roots.push(loc.path.clone());
+                }
+                crate::platform::volumes::LocationKind::NetworkDrive { .. } => {
+                    network_share_roots.push(loc.path.clone());
+                }
+                crate::platform::volumes::LocationKind::Cloud(_) => {}
+            }
+        }
         crate::domain::SafetyPolicy {
             preferences: self.safety(),
             home: self.home.clone(),
             state_dir: Some(self.state_dir.clone()),
             prohibit_delete,
+            external_drive_roots,
+            network_share_roots,
         }
     }
 
@@ -186,9 +201,22 @@ impl Application {
         })
     }
 
+    fn is_protected_cloud_root(&self, source: &std::path::Path) -> bool {
+        !self.safety().system_folders
+            && self.locations.iter().any(|loc| {
+                matches!(loc.kind, crate::platform::volumes::LocationKind::Cloud(_))
+                    && loc.path == source
+            })
+    }
+
     pub fn move_guidance(&self, source: &std::path::Path) -> Result<(), &'static str> {
         if !source.is_absolute() || source.to_str().is_none() || source.file_name().is_none() {
             return Err("Cannot move this native path exactly. Use Finder for this entry.");
+        }
+        if self.is_protected_cloud_root(source) {
+            return Err(
+                "System folder protection blocks moving or renaming this item. You can change this in Application Settings.",
+            );
         }
         self.safety_policy(None).check_entry_modification(source)?;
         if self.is_workspace_referenced_folder(source) {
@@ -218,20 +246,32 @@ impl Application {
     }
 
     fn has_ready_directory(&self, view: ViewId, directory: &std::path::Path) -> bool {
-        let primary_ready = self
-            .workspace
-            .view(view)
-            .is_some_and(|v| {
-                matches!(self.load(view), Some(LoadState::Ready(listing)) if listing.directory == v.navigation.current())
-            });
-        primary_ready
-            && (self
-                .workspace
-                .view(view)
-                .is_some_and(|v| v.navigation.current() == directory)
-                || self
-                    .valid_column_preview(view)
-                    .is_some_and(|listing| listing.directory == directory))
+        let current = self.workspace.view(view).map(|v| v.navigation.current());
+        let primary_ready = current.is_some_and(|cur| {
+            matches!(self.load(view), Some(LoadState::Ready(listing)) if listing.directory == cur)
+        });
+        if current == Some(directory) {
+            return primary_ready;
+        }
+        if primary_ready
+            && self
+                .valid_column_preview(view)
+                .is_some_and(|listing| listing.directory == directory)
+        {
+            return true;
+        }
+        self.is_sidebar_target(view, directory)
+    }
+
+    fn is_sidebar_target(&self, view: ViewId, directory: &std::path::Path) -> bool {
+        let Some(item) = self.workspace.box_for_view(view) else {
+            return false;
+        };
+        item.standalone.view == view
+            && item.has_sidebar()
+            && item.standalone.navigation.scope().allows(directory)
+            && (self.pinned_folders().iter().any(|path| path == directory)
+                || self.locations.iter().any(|loc| loc.path == directory))
     }
 
     pub fn rename_guidance(
@@ -256,6 +296,11 @@ impl Application {
                 && !entry.symlink)
         {
             return Err("Cannot rename this native entry exactly. Use Finder for this entry.");
+        }
+        if self.is_protected_cloud_root(source) {
+            return Err(
+                "System folder protection blocks moving or renaming this item. You can change this in Application Settings.",
+            );
         }
         self.safety_policy(Some(view))
             .check_entry_modification(source)?;
@@ -293,6 +338,11 @@ impl Application {
                 && !entry.symlink)
         {
             return Err("Cannot move this native entry to Trash. Use Finder for this entry.");
+        }
+        if self.is_protected_cloud_root(source) {
+            return Err(
+                "System folder protection blocks moving this item to Trash. You can change this in Application Settings.",
+            );
         }
         self.safety_policy(Some(view)).check_trash(source)?;
         if entry.kind == crate::application::contracts::directory::EntryKind::Directory
@@ -338,12 +388,17 @@ impl Application {
         directory: PathBuf,
         items: Vec<(Item, String)>,
     ) -> Vec<Effect> {
+        let read_policy = self.safety_policy(None);
         if !self.can_write_folder(view, &directory)
             || items.is_empty()
             || items.len() > ITEM_LIMIT
             || items.iter().any(|(item, name)| {
                 validate_name(name).is_err()
-                    || matches!(item, Item::Copy(path) if !path.is_absolute())
+                    || matches!(
+                        item,
+                        Item::Copy(path)
+                            if !path.is_absolute() || read_policy.check_read_directory(path).is_err()
+                    )
                     || matches!(item, Item::Move(path) if self.move_guidance(path).is_err())
                     || matches!(item, Item::Trash(path) if self.trash_guidance(view, path).is_err())
             })
@@ -393,6 +448,7 @@ impl Application {
             Item::Move(source) => source.parent().map(std::path::Path::to_path_buf),
             _ => None,
         };
+        let mut completed_ok = false;
         match receipt.outcome {
             Outcome::Conflict if !operation.stopped && !self.file_operations.close_requested => {
                 let mut job = receipt.job;
@@ -405,6 +461,7 @@ impl Application {
                 operation.record(&receipt.job, ItemStatus::Cancelled);
             }
             Outcome::Complete => {
+                completed_ok = true;
                 operation.completed += 1;
                 operation.record(&receipt.job, ItemStatus::Complete);
                 if let Item::Trash(source) | Item::Move(source) | Item::Rename(source) =
@@ -440,6 +497,9 @@ impl Application {
             self.file_operations.current = None;
         }
         let mut effects: Vec<_> = next.into_iter().collect();
+        if completed_ok {
+            self.note_path_access_granted(&directory);
+        }
         self.invalidate_file_directory(&directory);
         if let Some(source) = source_directory {
             self.invalidate_file_directory(&source);

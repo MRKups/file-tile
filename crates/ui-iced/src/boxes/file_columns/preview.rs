@@ -11,7 +11,7 @@ use iced::{Element, Fill, Padding, Task};
 #[cfg(test)]
 use crate::application::contracts::directory::{Cancellation, DirectoryReader};
 use crate::application::contracts::directory::{
-    DirectoryEntry, DirectoryListing, EntryKind, ListingCompletion, ListingRequest,
+    DirectoryEntry, DirectoryError, DirectoryListing, EntryKind, ListingCompletion, ListingRequest,
 };
 use crate::application::{Action, LoadState, Navigate};
 use crate::domain::sorting::{SortField, SortSettings, compare_names};
@@ -42,6 +42,7 @@ pub(crate) enum PreviewLoad {
     },
     Failed {
         message: String,
+        blocked_policy: Option<Box<crate::domain::SafetyPolicy>>,
     },
 }
 
@@ -302,10 +303,27 @@ impl Desktop {
         }
 
         let desired = collect_desired_previews(self);
+        let app = &self.application;
         self.column_previews.views.retain(|view, current| {
-            desired
-                .get(view)
-                .is_some_and(|target| target.directory == current.directory)
+            let Some(target) = desired.get(view) else {
+                return false;
+            };
+            if target.directory != current.directory {
+                return false;
+            }
+            let policy = app.safety_policy(Some(*view));
+            match &current.load {
+                PreviewLoad::Loading { .. } => true,
+                PreviewLoad::Loaded { listing, .. } => {
+                    policy.check_read_directory(&current.directory).is_ok()
+                        && policy.check_read_directory(&target.resolved_target).is_ok()
+                        && policy.check_read_directory(&listing.directory).is_ok()
+                        && app.check_listing_mount_access(listing).is_ok()
+                }
+                PreviewLoad::Failed { blocked_policy, .. } => blocked_policy
+                    .as_deref()
+                    .is_none_or(|old_policy| *old_policy == policy),
+            }
         });
         self.column_previews
             .pending
@@ -358,21 +376,19 @@ impl Desktop {
             },
         );
         let epoch = self.application.workspace_epoch();
-        if let Err(reason) = self
-            .application
-            .safety_policy(Some(view))
+        let safety = self.application.safety_policy(Some(view));
+        if let Some(reason) = safety
             .check_read_directory(&request.directory)
+            .err()
+            .or_else(|| safety.check_read_directory(&target.resolved_target).err())
         {
             return Task::done(Message::WorkspaceEpoch(
                 epoch,
                 Box::new(Message::ColumnPreviewCompleted(ListingCompletion {
-                    result: Err(
-                        crate::application::contracts::directory::DirectoryError {
-                            path: request.directory.clone(),
-                            kind: crate::application::contracts::directory::DirectoryErrorKind::PermissionDenied,
-                            detail: Some(reason.to_owned()),
-                        },
-                    ),
+                    result: Err(DirectoryError::access_disabled(
+                        request.directory.clone(),
+                        reason,
+                    )),
                     request,
                 })),
             ));
@@ -381,8 +397,12 @@ impl Desktop {
         match &self.directory {
             #[cfg(test)]
             DirectoryBackend::Controlled(reader) => {
-                let result =
-                    reader.list_scoped(&request.directory, &scope, &Cancellation::default());
+                let result = reader.list_permitted(
+                    &request.directory,
+                    &scope,
+                    &safety,
+                    &Cancellation::default(),
+                );
                 Task::done(Message::WorkspaceEpoch(
                     epoch,
                     Box::new(Message::ColumnPreviewCompleted(ListingCompletion {
@@ -392,7 +412,7 @@ impl Desktop {
                 ))
             }
             DirectoryBackend::Native(workers) => {
-                let future = workers.submit_scoped(request.clone(), scope);
+                let future = workers.submit_permitted(request.clone(), scope, safety);
                 let cancellation = future.cancellation();
                 let (task, handle) = Task::perform(future, move |completion| {
                     Message::WorkspaceEpoch(
@@ -440,8 +460,24 @@ impl Desktop {
         if !matches_pending {
             return Task::none();
         }
+        let current_policy = self.application.safety_policy(Some(view));
         match completion.result {
             Ok(listing) => {
+                if let Some(reason) = current_policy
+                    .check_read_directory(&listing.directory)
+                    .err()
+                    .or_else(|| self.application.check_listing_mount_access(&listing).err())
+                {
+                    let err = DirectoryError::access_disabled(completion.request.directory, reason);
+                    self.application.set_column_preview(view, None);
+                    preview.selected = None;
+                    preview.hovered = None;
+                    preview.load = PreviewLoad::Failed {
+                        message: err.to_string(),
+                        blocked_policy: Some(Box::new(current_policy)),
+                    };
+                    return Task::none();
+                }
                 let ordered = sort_preview_entries(&listing, preview.sort, preview.show_hidden);
                 if let Some((dir, target)) = pending_selected
                     && dir == preview.directory
@@ -464,9 +500,15 @@ impl Desktop {
                 };
             }
             Err(error) => {
+                let blocked_policy = (error.kind
+                    == crate::application::contracts::directory::DirectoryErrorKind::AccessDisabled)
+                    .then(|| Box::new(current_policy));
                 self.application.set_column_preview(view, None);
+                preview.selected = None;
+                preview.hovered = None;
                 preview.load = PreviewLoad::Failed {
                     message: error.to_string(),
+                    blocked_policy,
                 };
             }
         }
@@ -580,11 +622,29 @@ impl Desktop {
         if !self.file_view_input_enabled(view) || !self.application.workspace().can_browse(view) {
             return Task::none();
         }
-        let Some(preview) = self.column_previews.get(view) else {
+        let target = if let Some(preview) = self.column_previews.get(view) {
+            Some((preview.directory.clone(), preview.selected.clone()))
+        } else {
+            let scope = self
+                .application
+                .workspace()
+                .view(view)
+                .map(|v| v.navigation.scope());
+            let selected = self.views.get(&view).and_then(|s| s.selected.as_ref());
+            let listing = self.application.load(view).and_then(LoadState::listing);
+            match (scope, selected, listing) {
+                (Some(scope), Some(sel), Some(list)) => self
+                    .listed_entry(view, sel)
+                    .filter(|e| {
+                        e.kind == EntryKind::Directory && preview_entry_allowed(scope, list, e)
+                    })
+                    .map(|e| (e.path.clone(), None)),
+                _ => None,
+            }
+        };
+        let Some((target_dir, focus_target)) = target else {
             return Task::none();
         };
-        let target_dir = preview.directory.clone();
-        let focus_target = preview.selected.clone();
         self.type_jump.dismiss_session();
         self.activate_view(view);
         let presentation = self.views.entry(view).or_default();
@@ -651,6 +711,7 @@ impl Desktop {
 
 struct DesiredPreview {
     directory: PathBuf,
+    resolved_target: PathBuf,
     sort: SortSettings,
     show_hidden: bool,
 }
@@ -679,17 +740,22 @@ fn collect_desired_previews(desktop: &Desktop) -> HashMap<ViewId, DesiredPreview
         let Some(entry) = listing
             .entry(selected)
             .filter(|entry| item.settings.show_hidden || !entry.hidden)
-            .filter(|entry| entry.kind == EntryKind::Directory)
+            .filter(|entry| entry.kind == EntryKind::Directory && !entry.dataless)
         else {
             continue;
         };
         if !preview_entry_allowed(active.navigation.scope(), listing, entry) {
             continue;
         }
+        let resolved_target = listing
+            .entry_target(entry)
+            .unwrap_or(&entry.path)
+            .to_path_buf();
         out.insert(
             view,
             DesiredPreview {
                 directory: entry.path.clone(),
+                resolved_target,
                 sort: item.settings.sort,
                 show_hidden: item.settings.show_hidden,
             },
@@ -778,6 +844,7 @@ fn sort_preview_entries(
 pub(super) fn folder_preview<'a>(
     props: file_list::Props<'a>,
     allowed: bool,
+    dataless: bool,
     preview: Option<&'a ViewPreview>,
 ) -> Element<'a, Message> {
     let palette = props.palette;
@@ -786,7 +853,12 @@ pub(super) fn folder_preview<'a>(
         return status_note(ty, palette.muted, "Outside configured scope");
     }
     let Some(preview) = preview else {
-        return status_note(ty, palette.muted, "Loading…");
+        let label = if dataless {
+            "Online-only folder"
+        } else {
+            "Loading…"
+        };
+        return status_note(ty, palette.muted, label);
     };
     match &preview.load {
         PreviewLoad::Loading { .. } => status_note(ty, palette.muted, "Loading…"),
@@ -951,6 +1023,14 @@ fn preview_row_content<'a>(
     .spacing(10)
     .align_y(iced::Center);
 
+    if entry.dataless {
+        line = line.push(icons::view(
+            Icon::Cloud,
+            ty.icon(13.0),
+            Some(muted),
+            drag_dim,
+        ));
+    }
     if entry.symlink {
         line = line.push(ty.caption("link").color(muted));
     }

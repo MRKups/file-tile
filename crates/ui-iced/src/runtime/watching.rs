@@ -18,7 +18,11 @@ impl Desktop {
         &mut self,
         observations: Vec<DirectoryObservation>,
     ) -> Task<Message> {
-        if observations.is_empty() && self.folder_watcher.is_none() {
+        #[cfg(not(test))]
+        let watch_locations = self.application.accepts_edits();
+        #[cfg(test)]
+        let watch_locations = false;
+        if observations.is_empty() && !watch_locations && self.folder_watcher.is_none() {
             return Task::none();
         }
         if self.folder_watcher.is_none() {
@@ -33,7 +37,17 @@ impl Desktop {
         let Some(watcher) = &self.folder_watcher else {
             return Task::none();
         };
-        if let Err(error) = watcher.replace(observations.clone()) {
+        let location_roots = if watch_locations {
+            crate::platform::volumes::location_watch_roots(self.application.home())
+                .into_iter()
+                .filter(|path| {
+                    crate::application::contracts::configuration::validate_saved_path(path).is_ok()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if let Err(error) = watcher.replace_with_locations(observations.clone(), location_roots) {
             return failed(observations, error.to_string());
         }
         self.listen_for_folder_changes()
@@ -77,6 +91,7 @@ fn unavailable(observations: Vec<DirectoryObservation>, reason: String) -> Watch
                 changed: false,
             })
             .collect(),
+        locations_changed: false,
     }
 }
 

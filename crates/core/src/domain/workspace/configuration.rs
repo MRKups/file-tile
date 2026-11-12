@@ -13,6 +13,7 @@ pub struct BoxSettings {
     pub show_dates: bool,
     pub prohibit_delete: bool,
     pub file_view: FileView,
+    pub sidebar: bool,
 }
 
 impl Default for BoxSettings {
@@ -27,7 +28,28 @@ impl Default for BoxSettings {
             show_dates: false,
             prohibit_delete: false,
             file_view: FileView::List,
+            sidebar: false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LeftPanel {
+    #[default]
+    None,
+    Sidebar,
+    VerticalTabs,
+}
+impl LeftPanel {
+    pub const ALL: [Self; 3] = [Self::None, Self::Sidebar, Self::VerticalTabs];
+}
+impl std::fmt::Display for LeftPanel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::None => "None",
+            Self::Sidebar => "Sidebar",
+            Self::VerticalTabs => "Vertical tabs",
+        })
     }
 }
 
