@@ -451,10 +451,16 @@ fn execute(
             let result = store
                 .as_mut()
                 .ok_or(StorageFailure::Unavailable)
-                .and_then(|store| store.save(request));
+                .and_then(|store| {
+                    store.save(request)?;
+                    Ok(store.user_themes_notice.clone())
+                });
             StorageCompletion::Saved {
                 tag: request.tag,
-                result: result.map(|()| SaveOutcome::Saved),
+                result: result.map(|notice| match notice {
+                    Some(notice) => SaveOutcome::SavedWithThemesNotice(notice),
+                    None => SaveOutcome::Saved,
+                }),
             }
         }
     }
@@ -477,7 +483,7 @@ fn completion_outcome(completion: &StorageCompletion) -> Outcome {
             result
                 .as_ref()
                 .map_or_else(StorageFailure::diagnostic_outcome, |saved| match saved {
-                    SaveOutcome::Saved => Outcome::Complete,
+                    SaveOutcome::Saved | SaveOutcome::SavedWithThemesNotice(_) => Outcome::Complete,
                     SaveOutcome::Superseded => Outcome::Superseded,
                 })
         }

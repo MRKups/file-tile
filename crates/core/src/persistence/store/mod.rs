@@ -33,7 +33,7 @@ pub(super) struct Store {
     baselines: Vec<(ConfigKey, Vec<u8>)>,
     user_themes: Arc<[UserTheme]>,
     user_themes_baseline: Option<Vec<u8>>,
-    user_themes_notice: Option<String>,
+    pub(super) user_themes_notice: Option<String>,
     recovery: Option<RecoveryPlan>,
     management: Option<management::Pending>,
     #[cfg(test)]
@@ -343,12 +343,29 @@ impl Store {
         if let Some(bytes) = index_bytes {
             self.publish_loaded(ConfigKey::WorkspaceIndex, bytes)?;
         }
+        self.publish_loaded(ConfigKey::Preferences, preferences_bytes)?;
         if let Some(themes) = &request.user_themes {
-            self.user_themes =
-                super::user_themes::publish(&self.config, themes, &mut self.user_themes_baseline)?;
-            self.user_themes_notice = None;
+            match super::user_themes::publish(&self.config, themes, &mut self.user_themes_baseline)
+            {
+                Ok(saved) => {
+                    self.user_themes = saved;
+                    self.user_themes_notice = None;
+                }
+                Err(failure) => {
+                    crate::diagnostics::session().record(
+                        crate::diagnostics::Subsystem::Storage,
+                        crate::diagnostics::Activity::Save,
+                        failure.diagnostic_outcome(),
+                        request.tag.attempt,
+                        request.tag.revision,
+                        None,
+                    );
+                    self.user_themes_notice =
+                        Some(format!("Cannot save user-themes.json: {failure}"));
+                }
+            }
         }
-        self.publish_loaded(ConfigKey::Preferences, preferences_bytes)
+        Ok(())
     }
 
     fn publish_loaded(&mut self, key: ConfigKey, bytes: Vec<u8>) -> Result<(), StorageFailure> {

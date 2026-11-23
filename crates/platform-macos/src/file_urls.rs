@@ -5,8 +5,6 @@ use file_tile_platform_macos_appkit::file_url::{FileUrlError, encode_file_url_st
 use objc2::rc::Retained;
 use objc2_foundation::{NSString, NSURL};
 
-pub(super) use file_tile_platform_macos_appkit::file_url::MAX_PATH_BYTES;
-
 pub(super) fn encode(path: &Path) -> Result<Retained<NSString>, String> {
     match encode_file_url_string(path) {
         Ok(encoded) => Ok(NSString::from_str(&encoded)),

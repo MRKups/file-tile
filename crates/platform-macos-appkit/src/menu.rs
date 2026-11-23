@@ -64,12 +64,14 @@ define_class!(
     impl MenuTarget {
         #[unsafe(method(triggerMenuAction:))]
         fn trigger_menu_action(&self, sender: Option<&AnyObject>) {
-            let Some(item) = sender.and_then(|obj| obj.downcast_ref::<NSMenuItem>()) else {
-                return;
-            };
-            if let Some(action) = action_from_tag(item.tag()) {
-                (self.ivars().on_action)(action);
-            }
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let Some(item) = sender.and_then(|obj| obj.downcast_ref::<NSMenuItem>()) else {
+                    return;
+                };
+                if let Some(action) = action_from_tag(item.tag()) {
+                    (self.ivars().on_action)(action);
+                }
+            }));
         }
     }
 );

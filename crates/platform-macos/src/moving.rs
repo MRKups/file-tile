@@ -1,7 +1,10 @@
 //! Native exclusive move between retained parent directories, with verified cross-volume source cleanup.
-use objc2_foundation::NSFileManager;
+mod tree;
+
+pub use tree::{SourceTreeSnapshot, remove_verified_tree, snapshot_source_tree};
+
 use rustix::{
-    fs::{self, AtFlags, Mode, OFlags, RenameFlags},
+    fs::{self, AtFlags, FileType, Mode, OFlags, RenameFlags},
     io::Errno,
 };
 use std::path::Path;
@@ -68,7 +71,8 @@ pub fn remove_verified_source(
     source: &Path,
     source_parent: (u64, u64),
     original: (u64, u64),
-    is_dir: bool,
+    expected_size: u64,
+    expected_mtime: (i64, i64),
 ) -> Result<(), String> {
     let (Some(from_parent), Some(from)) = (source.parent(), source.file_name()) else {
         return Err("Cannot remove a filesystem root.".into());
@@ -80,29 +84,16 @@ pub fn remove_verified_source(
         .map_err(|error| format!("Cannot inspect source folder for cleanup: {error}"))?;
     let entry = fs::statat(&from_fd, from, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| format!("Cannot inspect source entry for cleanup: {error}"))?;
-    if identity(&from_stat) != source_parent || identity(&entry) != original {
+    let (size, mtime_sec, mtime_nsec) = tree::stat_fingerprint(&entry);
+    if identity(&from_stat) != source_parent
+        || identity(&entry) != original
+        || FileType::from_raw_mode(entry.st_mode).is_dir()
+        || (size, mtime_sec, mtime_nsec) != (expected_size, expected_mtime.0, expected_mtime.1)
+    {
         return Err("Source or parent folder changed before cleanup; both the copy and original were retained.".into());
     }
-    if is_dir {
-        objc2::rc::autoreleasepool(|_| {
-            let url = super::file_urls::encode_url(
-                source,
-                "Cannot encode source folder URL for cleanup.",
-            )?;
-            NSFileManager::new()
-                .removeItemAtURL_error(&url)
-                .map_err(|error| {
-                    format!(
-                        "Cannot remove original folder after cross-volume copy: {}",
-                        error.localizedDescription()
-                    )
-                })
-        })?;
-    } else {
-        fs::unlinkat(&from_fd, from, AtFlags::empty()).map_err(|error| {
-            format!("Cannot remove original file after cross-volume copy: {error}")
-        })?;
-    }
+    fs::unlinkat(&from_fd, from, AtFlags::empty())
+        .map_err(|error| format!("Cannot remove original file after cross-volume copy: {error}"))?;
     match fs::statat(&from_fd, from, AtFlags::SYMLINK_NOFOLLOW) {
         Err(Errno::NOENT) => Ok(()),
         Ok(_) => Err("Original source still exists after cross-volume copy.".into()),
@@ -110,7 +101,7 @@ pub fn remove_verified_source(
     }
 }
 
-fn identity(stat: &fs::Stat) -> (u64, u64) {
+pub(crate) fn identity(stat: &fs::Stat) -> (u64, u64) {
     (stat.st_dev as u64, stat.st_ino)
 }
 

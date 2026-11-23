@@ -38,7 +38,7 @@ pub(super) const fn is_launcher_shape(rect: GridRect) -> bool {
         && rect.height <= MAX_LAUNCHER_SPAN
 }
 
-const fn is_folder_box_shape(rect: GridRect) -> bool {
+pub(super) const fn is_folder_box_shape(rect: GridRect) -> bool {
     rect.width >= MIN_FOLDER_BOX_SHORT_SIDE
         && rect.height >= MIN_FOLDER_BOX_SHORT_SIDE
         && (rect.width >= MIN_FOLDER_BOX_LONG_SIDE || rect.height >= MIN_FOLDER_BOX_LONG_SIDE)

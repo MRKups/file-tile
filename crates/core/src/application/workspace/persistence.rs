@@ -167,6 +167,24 @@ impl Application {
                 *saved_revision = tag.revision;
                 *error = None;
                 self.user_themes_edited = false;
+                self.user_themes_notice = None;
+                if *closing == CloseStage::Flushing {
+                    recorder().record(
+                        Subsystem::Session,
+                        Activity::Close,
+                        Outcome::Complete,
+                        tag.attempt,
+                        tag.revision,
+                        None,
+                    );
+                    return vec![Effect::Close];
+                }
+            }
+            Ok(SaveOutcome::SavedWithThemesNotice(notice)) => {
+                *saved_revision = tag.revision;
+                *error = None;
+                self.user_themes_edited = false;
+                self.user_themes_notice = Some(notice);
                 if *closing == CloseStage::Flushing {
                     recorder().record(
                         Subsystem::Session,

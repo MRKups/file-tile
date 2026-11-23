@@ -105,12 +105,14 @@ pub struct ManagementResult {
     pub selected: Option<Box<LoadedConfiguration>>,
     pub source_saved: bool,
     pub source_error: Option<StorageFailure>,
+    pub user_themes_notice: Option<String>,
     pub cancelled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveOutcome {
     Saved,
+    SavedWithThemesNotice(String),
     Superseded,
 }
 

@@ -151,8 +151,23 @@ pub(super) fn publish(
     }
     let target = config_dir.join(FILENAME);
     let existing = read_optional(&target, BYTE_LIMIT)?;
+    let rotate_backup = match &existing {
+        Some(previous) => match decode(previous) {
+            Ok(_) => true,
+            Err(error @ (ConfigError::UnsupportedVersion(_) | ConfigError::UnsupportedFormat)) => {
+                return Err(StorageFailure::InvalidConfiguration(error.reason().into()));
+            }
+            Err(_) => false,
+        },
+        None => {
+            if fs::symlink_metadata(&target).is_ok() {
+                return Err(StorageFailure::UnsafePath);
+            }
+            false
+        }
+    };
     let temporary = Temporary::write(config_dir, &bytes)?;
-    if let Some(previous) = existing {
+    if rotate_backup && let Some(previous) = existing {
         let backup = config_dir.join(format!("{FILENAME}.bak"));
         if let Ok(meta) = fs::symlink_metadata(&backup)
             && !meta.is_file()
@@ -162,8 +177,6 @@ pub(super) fn publish(
         let backup_tmp = Temporary::write(config_dir, &previous)?;
         fs::rename(&backup_tmp.path, &backup)?;
         sync_directory(config_dir)?;
-    } else if fs::symlink_metadata(&target).is_ok() {
-        return Err(StorageFailure::UnsafePath);
     }
     fs::rename(&temporary.path, &target)?;
     sync_directory(config_dir)?;

@@ -358,6 +358,8 @@ impl Application {
             if result.source_saved {
                 *saved_revision = *revision;
                 *error = None;
+                self.user_themes_edited = false;
+                self.user_themes_notice = result.user_themes_notice;
             } else if result.source_error.is_some() {
                 *error = result.source_error;
             }

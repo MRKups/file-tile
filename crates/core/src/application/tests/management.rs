@@ -60,6 +60,7 @@ fn management_source_failure_retry_cancel_keeps_state_and_operation() -> Result<
             selected: None,
             source_saved: false,
             source_error: Some(StorageFailure::Unavailable),
+            user_themes_notice: None,
             cancelled: true,
         }),
     }));
@@ -113,6 +114,7 @@ fn management_close_failure_keeps_retry_cancel_and_explicit_discard_reachable()
             selected: None,
             source_saved: true,
             source_error: None,
+            user_themes_notice: None,
             cancelled: true,
         }),
     }));
@@ -180,6 +182,7 @@ fn equal_id_switch() -> Result<EqualIdSwitch, &'static str> {
             })),
             source_saved: true,
             source_error: None,
+            user_themes_notice: None,
             cancelled: false,
         }),
     };

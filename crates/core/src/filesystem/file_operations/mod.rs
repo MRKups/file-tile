@@ -70,7 +70,32 @@ impl Future for FileOperationFuture {
     }
 }
 
-fn execute(job: Job) -> Completion {
+fn canonicalize_best_effort(path: &Path) -> std::path::PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::new();
+    while let Some(name) = current.file_name() {
+        suffix.push(name.to_os_string());
+        if !current.pop() {
+            break;
+        }
+        if let Ok(mut canonical) = std::fs::canonicalize(&current) {
+            for part in suffix.into_iter().rev() {
+                canonical.push(part);
+            }
+            return canonical;
+        }
+    }
+    path.to_path_buf()
+}
+
+fn execute(mut job: Job) -> Completion {
+    job.safety.home = canonicalize_best_effort(&job.safety.home);
+    if let Some(state_dir) = &mut job.safety.state_dir {
+        *state_dir = canonicalize_best_effort(state_dir);
+    }
     let started = std::time::Instant::now();
     let activity = match job.item {
         Item::Copy(_) => Activity::Copy,

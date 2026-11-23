@@ -275,11 +275,30 @@ pub mod moving {
         ))
     }
 
+    pub struct SourceTreeSnapshot;
+
+    pub fn snapshot_source_tree(
+        _source: &Path,
+        _source_parent: (u64, u64),
+        _original: (u64, u64),
+    ) -> Result<SourceTreeSnapshot, String> {
+        Err("Verified source tree snapshot is not yet implemented on Linux.".into())
+    }
+
+    pub fn remove_verified_tree(
+        _source: &Path,
+        _source_parent: (u64, u64),
+        _snapshot: &SourceTreeSnapshot,
+    ) -> Result<(), String> {
+        Err("Verified source tree cleanup is not yet implemented on Linux.".into())
+    }
+
     pub fn remove_verified_source(
         _source: &Path,
         _source_parent: (u64, u64),
         _original: (u64, u64),
-        _is_dir: bool,
+        _expected_size: u64,
+        _expected_mtime: (i64, i64),
     ) -> Result<(), String> {
         Err("Verified source cleanup is not yet implemented on Linux.".into())
     }
