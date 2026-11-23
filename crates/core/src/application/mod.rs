@@ -101,6 +101,15 @@ pub enum Action {
         locations: Vec<crate::platform::volumes::DetectedLocation>,
         ungranted_pins: std::collections::BTreeSet<PathBuf>,
     },
+    EjectVolume {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+    },
+    VolumeEjected {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+        result: Result<(), String>,
+    },
     PinFolder {
         path: PathBuf,
         index: Option<usize>,
@@ -171,6 +180,10 @@ pub enum Effect {
         pinned: Vec<PathBuf>,
         safety: crate::domain::SafetyPreferences,
     },
+    EjectVolume {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+    },
     LoadConfiguration(SessionId),
     RestoreBackup {
         session: SessionId,
@@ -227,6 +240,7 @@ pub struct Application {
     locations: Vec<crate::platform::volumes::DetectedLocation>,
     ungranted_pins: std::collections::BTreeSet<PathBuf>,
     location_generation: u64,
+    ejecting_volumes: std::collections::BTreeSet<PathBuf>,
     user_themes: std::sync::Arc<[appearance::UserTheme]>,
     user_themes_edited: bool,
     user_themes_notice: Option<String>,
@@ -272,6 +286,7 @@ impl Application {
             locations: Vec::new(),
             ungranted_pins: std::collections::BTreeSet::new(),
             location_generation: 0,
+            ejecting_volumes: std::collections::BTreeSet::new(),
             user_themes: std::sync::Arc::from([]),
             user_themes_edited: false,
             user_themes_notice: None,
@@ -431,6 +446,7 @@ impl Application {
                 | Action::CancelClose
                 | Action::FileOperationCompleted(_)
                 | Action::ChangeTabs(..)
+                | Action::VolumeEjected { .. }
         );
         let force = matches!(action, Action::ReloadAll) && self.accepts_workspace_input();
         let mut effects = self.apply(action);
@@ -466,6 +482,12 @@ impl Application {
                 locations,
                 ungranted_pins,
             } => return self.locations_loaded(generation, locations, ungranted_pins),
+            Action::EjectVolume { box_id, path } => return self.eject_volume(box_id, path),
+            Action::VolumeEjected {
+                box_id,
+                path,
+                result,
+            } => return self.volume_ejected(box_id, path, result),
             Action::FileOperationCompleted(receipt) => return self.files_completed(receipt),
             Action::StopFileOperation(id) => {
                 self.stop_files(id);
@@ -614,6 +636,8 @@ impl Application {
             | Action::SyncViewScroll(..)
             | Action::RefreshLocations
             | Action::LocationsLoaded { .. }
+            | Action::EjectVolume { .. }
+            | Action::VolumeEjected { .. }
             | Action::StartFileOperation { .. }
             | Action::FileOperationCompleted(_)
             | Action::ResolveFileConflict(..)

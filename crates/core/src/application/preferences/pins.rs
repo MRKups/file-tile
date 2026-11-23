@@ -7,7 +7,8 @@ use crate::application::contracts::directory::EntryKind;
 use crate::application::contracts::storage::{CloseStage, PersistenceState};
 use crate::application::{Application, Effect, LoadState};
 use crate::diagnostics::{Change, configuration_changed};
-use crate::platform::volumes::DetectedLocation;
+use crate::domain::{BoxId, Mode, NavigationIntent, ScopeKind, ViewId};
+use crate::platform::volumes::{DetectedLocation, LocationKind};
 
 impl Application {
     pub fn pinned_folders(&self) -> &[PathBuf] {
@@ -141,6 +142,95 @@ impl Application {
 
     pub fn locations(&self) -> &[DetectedLocation] {
         &self.locations
+    }
+
+    pub fn ejecting_volumes(&self) -> &std::collections::BTreeSet<PathBuf> {
+        &self.ejecting_volumes
+    }
+
+    pub fn is_ejecting_volume(&self, path: &Path) -> bool {
+        self.ejecting_volumes.contains(path)
+    }
+
+    pub(in crate::application) fn eject_volume(
+        &mut self,
+        box_id: BoxId,
+        path: PathBuf,
+    ) -> Vec<Effect> {
+        if !self.accepts_workspace_input() || self.file_operation().is_some() {
+            return Vec::new();
+        }
+        if self.workspace.mode() == Mode::Configure && !self.workspace.configuring(box_id) {
+            return Vec::new();
+        }
+        if !self
+            .workspace
+            .boxes()
+            .iter()
+            .any(|item| item.id == box_id && item.has_sidebar())
+        {
+            return Vec::new();
+        }
+        if !self.locations.iter().any(|loc| {
+            loc.path == path
+                && matches!(
+                    loc.kind,
+                    LocationKind::ExternalDrive | LocationKind::NetworkDrive { .. }
+                )
+        }) {
+            return Vec::new();
+        }
+        if !self.ejecting_volumes.insert(path.clone()) {
+            return Vec::new();
+        }
+        vec![Effect::EjectVolume { box_id, path }]
+    }
+
+    pub(in crate::application) fn volume_ejected(
+        &mut self,
+        _box_id: BoxId,
+        path: PathBuf,
+        result: Result<(), String>,
+    ) -> Vec<Effect> {
+        self.ejecting_volumes.remove(&path);
+        let mut effects = self.refresh_locations();
+        if result.is_err() || !self.accepts_edits() {
+            return effects;
+        }
+        let views: Vec<(ViewId, PathBuf, PathBuf, ScopeKind)> = self
+            .workspace
+            .active_views()
+            .filter(|item| item.navigation.current().starts_with(&path))
+            .map(|item| {
+                let target = if !item.navigation.return_target().starts_with(&path) {
+                    item.navigation.return_target().to_path_buf()
+                } else if !self.home.starts_with(&path) {
+                    self.home.clone()
+                } else {
+                    PathBuf::from("/")
+                };
+                (
+                    item.view,
+                    item.navigation.current().to_path_buf(),
+                    target,
+                    item.navigation.scope().kind(),
+                )
+            })
+            .collect();
+        for (view, current, fallback, scope_kind) in views {
+            let (target, intent) = if scope_kind == ScopeKind::Free {
+                (fallback, NavigationIntent::Open)
+            } else {
+                (current, NavigationIntent::Reload)
+            };
+            if let Some(effect) = self.request(view, target, intent) {
+                if let Effect::List(request) = &effect {
+                    self.demand_usage_read(request.generation);
+                }
+                effects.push(effect);
+            }
+        }
+        effects
     }
 
     pub fn ungranted_pins(&self) -> &std::collections::BTreeSet<PathBuf> {

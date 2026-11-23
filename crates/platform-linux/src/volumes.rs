@@ -96,3 +96,7 @@ pub fn is_local_measurable_mount(_path: &Path) -> bool {
 pub fn location_watch_roots(_home: &Path) -> Vec<PathBuf> {
     Vec::new()
 }
+
+pub fn eject_volume(_path: &Path) -> Result<(), String> {
+    Err("Volume ejection is not yet implemented on Linux.".into())
+}

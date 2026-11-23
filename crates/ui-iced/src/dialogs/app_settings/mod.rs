@@ -174,6 +174,7 @@ impl Desktop {
                     | Action::PinFolder { .. }
                     | Action::UnpinFolder(_)
                     | Action::ReorderPinnedFolder { .. }
+                    | Action::EjectVolume { .. }
                     | Action::ConfigureBox(_)
                     | Action::SetBoxSetting(..)
                     | Action::SetSort(..)

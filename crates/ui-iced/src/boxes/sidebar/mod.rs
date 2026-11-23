@@ -152,6 +152,7 @@ pub struct Props<'a> {
     pub pinned: &'a [PathBuf],
     pub ungranted_pins: &'a std::collections::BTreeSet<PathBuf>,
     pub locations: &'a [DetectedLocation],
+    pub ejecting: &'a std::collections::BTreeSet<PathBuf>,
     pub safety_policy: crate::domain::SafetyPolicy,
     pub mode: Mode,
     pub interactive: bool,
@@ -269,14 +270,26 @@ fn pinned_row<'a>(props: &Props<'a>, index: usize, path: &'a Path) -> Element<'a
     });
     let menu_path = path.to_path_buf();
     let context: Option<Box<dyn Fn(Point) -> Message>> = enabled.then(|| {
-        Box::new(move |point| Message::OpenSidebarMenu(id, menu_path.clone(), Some(point))) as _
+        Box::new(move |point| {
+            Message::OpenSidebarMenu(
+                id,
+                menu_path.clone(),
+                crate::menus::sidebar_menu::MenuKind::Pinned,
+                Some(point),
+            )
+        }) as _
     });
     let row_el = context_menu::press(activation, context, inner);
     let row_el = if enabled {
         let keys = vec![(
             keyboard::key::Named::F10,
             keyboard::Modifiers::SHIFT,
-            Message::OpenSidebarMenu(id, path.to_path_buf(), None),
+            Message::OpenSidebarMenu(
+                id,
+                path.to_path_buf(),
+                crate::menus::sidebar_menu::MenuKind::Pinned,
+                None,
+            ),
         )];
         focus_control::themed_highlight_keys_radius(
             pin_row_id(id, index),
@@ -317,6 +330,13 @@ fn pinned_row<'a>(props: &Props<'a>, index: usize, path: &'a Path) -> Element<'a
     with_row_tooltip(row_el, path, props.home, access, palette)
 }
 
+fn bottom_row_radius(index: usize, len: usize) -> iced::border::Radius {
+    iced::border::Radius {
+        bottom_left: if index + 1 == len { CORNER_RADIUS } else { 0.0 },
+        ..iced::border::Radius::default()
+    }
+}
+
 fn location_row<'a>(
     props: &Props<'a>,
     index: usize,
@@ -331,7 +351,23 @@ fn location_row<'a>(
         safety_enabled: props.safety_policy.check_read_directory(&loc.path).is_ok(),
         os_granted: loc.accessible,
     };
-    let enabled = props.interactive && props.mode != Mode::Layout && access.can_enter();
+    let row_interactive = props.interactive && props.mode != Mode::Layout;
+    let enabled = row_interactive && access.can_enter();
+    let ejectable = matches!(
+        loc.kind,
+        LocationKind::ExternalDrive | LocationKind::NetworkDrive { .. }
+    );
+    if ejectable {
+        return ejectable_location_row(
+            props,
+            index,
+            loc,
+            selected,
+            access,
+            row_interactive,
+            enabled,
+        );
+    }
     let icon = location_icon(&loc.kind);
     let view = props.item.standalone.view;
     let focus_msg = enabled.then_some(Message::FocusTab(view));
@@ -340,7 +376,7 @@ fn location_row<'a>(
         icon,
         selected,
         access,
-        props.interactive && props.mode != Mode::Layout,
+        row_interactive,
         focus_msg,
         palette,
     );
@@ -357,20 +393,245 @@ fn location_row<'a>(
             Message::SidebarLocationActivated(id, loc.path.clone()),
             inner,
             Vec::new(),
-            iced::border::Radius {
-                bottom_left: if index + 1 == props.locations.len() {
-                    CORNER_RADIUS
-                } else {
-                    0.0
-                },
-                ..iced::border::Radius::default()
-            },
+            bottom_row_radius(index, props.locations.len()),
             palette,
         )
     } else {
         inner
     };
     with_row_tooltip(row_el, &loc.path, props.home, access, palette)
+}
+
+fn ejectable_location_row<'a>(
+    props: &Props<'a>,
+    index: usize,
+    loc: &'a DetectedLocation,
+    selected: bool,
+    access: RowAccess,
+    row_interactive: bool,
+    enabled: bool,
+) -> Element<'a, Message> {
+    let palette = props.palette;
+    let ty = palette.typography;
+    let id = props.item.id;
+    let view = props.item.standalone.view;
+    let is_ejecting = props.ejecting.contains(&loc.path);
+    let nav_btn = ejectable_nav_button(
+        loc,
+        selected,
+        access,
+        row_interactive,
+        enabled.then_some(Message::FocusTab(view)),
+        palette,
+    );
+    let activation = enabled.then(|| {
+        (
+            view,
+            Message::SidebarLocationActivated(id, loc.path.clone()),
+        )
+    });
+    let nav_el = context_menu::press(activation, None, nav_btn);
+    let nav_el = if enabled {
+        let keys = vec![(
+            keyboard::key::Named::F10,
+            keyboard::Modifiers::SHIFT,
+            Message::OpenSidebarMenu(
+                id,
+                loc.path.clone(),
+                crate::menus::sidebar_menu::MenuKind::Volume,
+                None,
+            ),
+        )];
+        focus_control::themed_highlight_keys_radius(
+            location_row_id(id, index),
+            Message::SidebarLocationActivated(id, loc.path.clone()),
+            nav_el,
+            keys,
+            bottom_row_radius(index, props.locations.len()),
+            palette,
+        )
+    } else {
+        nav_el
+    };
+    let nav_with_tip = with_row_tooltip(nav_el, &loc.path, props.home, access, palette);
+    let eject_btn = eject_icon_button(
+        id,
+        &loc.path,
+        selected,
+        row_interactive,
+        is_ejecting,
+        palette,
+    );
+    let row_el = container(
+        iced::widget::row![nav_with_tip, eject_btn]
+            .width(Fill)
+            .height(ty.row(ROW_HEIGHT))
+            .align_y(Center),
+    )
+    .width(Fill)
+    .height(ty.row(ROW_HEIGHT))
+    .style(move |_| {
+        if selected {
+            container::Style {
+                background: Some(palette.row_selected.into()),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            }
+        } else {
+            container::Style::default()
+        }
+    });
+    let menu_path = loc.path.clone();
+    let context: Option<Box<dyn Fn(Point) -> Message>> = row_interactive.then(|| {
+        Box::new(move |point| {
+            Message::OpenSidebarMenu(
+                id,
+                menu_path.clone(),
+                crate::menus::sidebar_menu::MenuKind::Volume,
+                Some(point),
+            )
+        }) as _
+    });
+    context_menu::press(None, context, row_el.into())
+}
+
+fn ejectable_nav_button(
+    loc: &DetectedLocation,
+    selected: bool,
+    access: RowAccess,
+    interactive: bool,
+    on_press: Option<Message>,
+    palette: a::Palette,
+) -> Element<'static, Message> {
+    let ty = palette.typography;
+    let allowed = access.can_enter();
+    let alpha = if allowed { 1.0 } else { 0.45 };
+    let text_color = if allowed {
+        palette.tab_text
+    } else {
+        palette.muted
+    };
+    let icon = location_icon(&loc.kind);
+    let mut row_items = iced::widget::row![
+        icons::view(icon, ty.icon(15.0), Some(palette.icon(icon)), alpha),
+        container(
+            ty.text(loc.label.clone())
+                .color(text_color)
+                .wrapping(text::Wrapping::None)
+        )
+        .width(Fill)
+        .clip(true)
+    ]
+    .spacing(8)
+    .align_y(Center);
+    if access.show_lock() {
+        row_items = row_items.push(icons::view(
+            Icon::Lock,
+            ty.icon(12.5),
+            Some(palette.muted),
+            if allowed { 0.85 } else { 0.55 },
+        ));
+    }
+    let content = container(row_items)
+        .padding(Padding {
+            top: 0.0,
+            right: 4.0,
+            bottom: 0.0,
+            left: 12.0,
+        })
+        .width(Fill)
+        .height(ty.row(ROW_HEIGHT))
+        .align_y(Center)
+        .clip(true);
+    button(content)
+        .padding(0)
+        .width(Fill)
+        .height(ty.row(ROW_HEIGHT))
+        .on_press_maybe(on_press)
+        .style(move |_, status| button::Style {
+            text_color,
+            background: Some(
+                if !selected
+                    && interactive
+                    && allowed
+                    && matches!(status, button::Status::Hovered | button::Status::Pressed)
+                {
+                    palette.row_hover
+                } else {
+                    Color::TRANSPARENT
+                }
+                .into(),
+            ),
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        })
+        .into()
+}
+
+fn eject_icon_button(
+    id: BoxId,
+    path: &Path,
+    selected: bool,
+    row_interactive: bool,
+    is_ejecting: bool,
+    palette: a::Palette,
+) -> Element<'static, Message> {
+    let ty = palette.typography;
+    let can_eject = row_interactive && !is_ejecting;
+    let icon = icons::view(
+        Icon::Eject,
+        ty.icon(12.5),
+        Some(palette.muted),
+        if is_ejecting { 0.3 } else { 0.65 },
+    );
+    let content = container(icon)
+        .padding(Padding {
+            top: 0.0,
+            right: 8.0,
+            bottom: 0.0,
+            left: 4.0,
+        })
+        .height(ty.row(ROW_HEIGHT))
+        .align_y(Center);
+    let btn = button(content)
+        .padding(0)
+        .height(ty.row(ROW_HEIGHT))
+        .on_press_maybe(can_eject.then(|| Message::EjectSidebarVolume(id, path.to_path_buf())))
+        .style(move |_, status| button::Style {
+            text_color: palette.muted,
+            background: Some(
+                if !selected
+                    && can_eject
+                    && matches!(status, button::Status::Hovered | button::Status::Pressed)
+                {
+                    palette.row_hover
+                } else {
+                    Color::TRANSPARENT
+                }
+                .into(),
+            ),
+            border: Border {
+                radius: 4.0.into(),
+                ..Border::default()
+            },
+            ..button::Style::default()
+        });
+    tooltip(
+        btn,
+        palette
+            .typography
+            .small(if is_ejecting { "Ejecting…" } else { "Eject" }),
+        tooltip::Position::Top,
+    )
+    .delay(Duration::from_millis(450))
+    .style(move |_| palette.tooltip())
+    .into()
 }
 
 fn row_button(
@@ -698,6 +959,9 @@ impl Desktop {
             }
             Message::SidebarPinPressed(id, index, path) => self.press_sidebar_pin(id, index, path),
             Message::SidebarLocationActivated(id, path) => self.activate_sidebar_location(id, path),
+            Message::EjectSidebarVolume(box_id, path) => {
+                self.dispatch(Action::EjectVolume { box_id, path })
+            }
             _ => iced::Task::none(),
         }
     }

@@ -100,9 +100,15 @@ enum Message {
     OpenTabMenu(crate::domain::BoxId, ViewId, Option<Point>),
     DismissTabMenu(u64),
     CloseMenuTab(u64),
-    OpenSidebarMenu(crate::domain::BoxId, PathBuf, Option<Point>),
+    OpenSidebarMenu(
+        crate::domain::BoxId,
+        PathBuf,
+        sidebar_menu::MenuKind,
+        Option<Point>,
+    ),
     DismissSidebarMenu(u64),
     UnpinSidebarMenu(u64),
+    EjectSidebarMenu(u64),
     OpenEntryMenu(ViewId, PathBuf, Option<Point>),
     OpenFolderMenu(ViewId, Point),
     OpenPreviewFolderMenu(ViewId, Point),
@@ -134,6 +140,7 @@ enum Message {
     SidebarScrolled(crate::domain::BoxId, f32),
     SidebarPinPressed(crate::domain::BoxId, usize, PathBuf),
     SidebarLocationActivated(crate::domain::BoxId, PathBuf),
+    EjectSidebarVolume(crate::domain::BoxId, PathBuf),
     Action(Action),
     Input(Event, Status),
     WindowEvent(iced_window::Id, iced_window::Event),
@@ -715,6 +722,7 @@ impl Desktop {
             | Message::OpenSidebarMenu(..)
             | Message::DismissSidebarMenu(_)
             | Message::UnpinSidebarMenu(_)
+            | Message::EjectSidebarMenu(_)
             | Message::OpenEntryMenu(..)
             | Message::OpenFolderMenu(..)
             | Message::OpenPreviewFolderMenu(..)
@@ -739,7 +747,8 @@ impl Desktop {
             | Message::FocusTab(_)) => self.tab_message(message),
             message @ (Message::SidebarScrolled(..)
             | Message::SidebarPinPressed(..)
-            | Message::SidebarLocationActivated(..)) => self.sidebar_message(message),
+            | Message::SidebarLocationActivated(..)
+            | Message::EjectSidebarVolume(..)) => self.sidebar_message(message),
             Message::FolderChanges(batch) => self.folder_changes(batch),
             message @ (Message::LayoutPressed { .. }
             | Message::LayoutPointerMoved(_)
@@ -854,10 +863,15 @@ impl Desktop {
         };
         let completed_view = self.listing_completion_context(&action);
         let locations_updated = matches!(action, Action::LocationsLoaded { .. });
+        let ejected_feedback = match &action {
+            Action::VolumeEjected { box_id, result, .. } => Some((*box_id, result.clone())),
+            _ => None,
+        };
         effects.extend(self.application.update(action));
         if locations_updated {
             self.sync_app_settings_locations();
         }
+        self.apply_eject_feedback(ejected_feedback);
         let switched = epoch_before != self.application.workspace_epoch() && !restored;
         if switched {
             self.clear_workspace_context();
@@ -905,6 +919,25 @@ impl Desktop {
                 self.reconcile_boxes_after(boxes_before)
             },
         ])
+    }
+
+    fn apply_eject_feedback(
+        &mut self,
+        feedback: Option<(crate::domain::BoxId, Result<(), String>)>,
+    ) {
+        let Some((box_id, result)) = feedback else {
+            return;
+        };
+        if let Some(item) = self
+            .application
+            .workspace()
+            .boxes()
+            .iter()
+            .find(|item| item.id == box_id)
+        {
+            let active_view = item.active_view().view;
+            self.views.entry(active_view).or_default().hint = result.err();
+        }
     }
 
     fn finish_dispatch_focus(

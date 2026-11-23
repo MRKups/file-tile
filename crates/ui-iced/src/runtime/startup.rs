@@ -233,6 +233,7 @@ impl Desktop {
                 pinned,
                 safety,
             } => self.refresh_locations_task(generation, home, pinned, safety),
+            Effect::EjectVolume { box_id, path } => self.eject_volume_task(box_id, path),
             Effect::List(request) => {
                 let presentation = self.views.entry(request.view).or_default();
                 presentation.submitted_revision =
@@ -291,5 +292,28 @@ impl Desktop {
             handle,
         });
         task
+    }
+
+    fn eject_volume_task(
+        &self,
+        box_id: crate::domain::BoxId,
+        path: std::path::PathBuf,
+    ) -> Task<Message> {
+        let Some(workers) = &self.location_workers else {
+            return Task::done(Message::Action(Action::VolumeEjected {
+                box_id,
+                path,
+                result: Err(
+                    "Volume ejection service is unavailable. Try again from Finder.".into(),
+                ),
+            }));
+        };
+        Task::perform(workers.eject(path.clone()), move |result| {
+            Message::Action(Action::VolumeEjected {
+                box_id,
+                path,
+                result,
+            })
+        })
     }
 }

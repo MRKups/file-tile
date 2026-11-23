@@ -38,6 +38,7 @@ pub enum Icon {
     Network,
     Pin,
     Lock,
+    Eject,
 }
 
 impl Icon {
@@ -92,11 +93,12 @@ impl Icon {
             Self::Network => include_bytes!("../../../../assets/icons/ui/network.svg"),
             Self::Pin => include_bytes!("../../../../assets/icons/ui/pin.svg"),
             Self::Lock => include_bytes!("../../../../assets/icons/ui/lock.svg"),
+            Self::Eject => include_bytes!("../../../../assets/icons/ui/eject.svg"),
         }
     }
 
     fn handle(self) -> Handle {
-        static HANDLES: OnceLock<[Handle; 29]> = OnceLock::new();
+        static HANDLES: OnceLock<[Handle; 30]> = OnceLock::new();
         HANDLES.get_or_init(|| {
             [
                 Self::Eye,
@@ -128,6 +130,7 @@ impl Icon {
                 Self::Network,
                 Self::Pin,
                 Self::Lock,
+                Self::Eject,
             ]
             .map(|icon| Handle::from_memory(icon.bytes()))
         })[self as usize]

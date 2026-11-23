@@ -104,9 +104,12 @@ impl Desktop {
             Message::OpenTabMenu(id, view, point) => self.open_tab_menu(id, view, point),
             Message::DismissTabMenu(generation) => self.dismiss_tab_menu(generation),
             Message::CloseMenuTab(generation) => self.close_menu_tab(generation),
-            Message::OpenSidebarMenu(id, path, point) => self.open_sidebar_menu(id, path, point),
+            Message::OpenSidebarMenu(id, path, kind, point) => {
+                self.open_sidebar_menu(id, path, kind, point)
+            }
             Message::DismissSidebarMenu(generation) => self.dismiss_sidebar_menu(generation),
             Message::UnpinSidebarMenu(generation) => self.unpin_sidebar_menu(generation),
+            Message::EjectSidebarMenu(generation) => self.eject_sidebar_menu(generation),
             Message::OpenEntryMenu(view, path, point) => self.open_entry_menu(view, path, point),
             Message::DismissEntryMenu(generation) => self.dismiss_entry_menu(generation),
             Message::EntryMenuAction(generation, action) => {

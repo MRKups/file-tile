@@ -14,13 +14,30 @@ pub type LocationProbe = (Vec<DetectedLocation>, BTreeSet<PathBuf>);
 
 pub struct LocationWorkers {
     workers: Workers<LocationProbe>,
+    eject_workers: Workers<Result<(), String>>,
 }
 
 impl LocationWorkers {
     pub fn new() -> std::io::Result<Self> {
         Ok(Self {
             workers: Workers::new("locations", 1, 2)?,
+            eject_workers: Workers::new("eject", 1, 4)?,
         })
+    }
+
+    pub fn eject(&self, path: PathBuf) -> impl Future<Output = Result<(), String>> + use<> {
+        let future = self
+            .eject_workers
+            .submit(move |_cancel| crate::platform::volumes::eject_volume(&path));
+        async move {
+            match future.await {
+                Ok(result) => result,
+                Err(_) => Err(
+                    "Volume ejection service is unavailable. Close files using the volume and try again."
+                        .into(),
+                ),
+            }
+        }
     }
 
     pub fn detect(

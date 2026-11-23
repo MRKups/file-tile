@@ -133,8 +133,8 @@ pub(super) fn at_point(message: Message, point: Point) -> Message {
             Message::OpenEntryMenu(view, path, Some(point))
         }
         Message::OpenTabMenu(id, view, Some(_)) => Message::OpenTabMenu(id, view, Some(point)),
-        Message::OpenSidebarMenu(id, path, Some(_)) => {
-            Message::OpenSidebarMenu(id, path, Some(point))
+        Message::OpenSidebarMenu(id, path, kind, Some(_)) => {
+            Message::OpenSidebarMenu(id, path, kind, Some(point))
         }
         message => message,
     }

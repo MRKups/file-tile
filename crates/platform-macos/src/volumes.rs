@@ -178,6 +178,45 @@ pub fn location_watch_roots(home: &Path) -> Vec<PathBuf> {
     ]
 }
 
+pub fn eject_volume(path: &Path) -> Result<(), String> {
+    let Ok(stat) = rustix::fs::statfs(path) else {
+        return Err(
+            "Only mounted external drives, disk images, and network shares can be ejected.".into(),
+        );
+    };
+    if (stat.f_flags & MNT_ROOTFS) != 0 || (stat.f_flags & MNT_DONTBROWSE) != 0 {
+        return Err(
+            "Only mounted external drives, disk images, and network shares can be ejected.".into(),
+        );
+    }
+    let mntonname = c_chars_to_string(&stat.f_mntonname);
+    let mount_path = Path::new(&mntonname);
+    let matches_mount = mount_path == path
+        || fs::canonicalize(path)
+            .ok()
+            .is_some_and(|canon| canon == mount_path);
+    if !mntonname.starts_with("/Volumes/") || mount_path == Path::new("/Volumes") || !matches_mount
+    {
+        return Err(
+            "Only mounted external drives, disk images, and network shares can be ejected.".into(),
+        );
+    }
+    objc2::rc::autoreleasepool(|_| {
+        let url =
+            crate::file_urls::encode_url(mount_path, "Cannot encode volume path for ejection.")?;
+        objc2_app_kit::NSWorkspace::sharedWorkspace()
+            .unmountAndEjectDeviceAtURL_error(&url)
+            .map_err(|error| {
+                let detail = error.localizedDescription().to_string();
+                if detail.trim().is_empty() {
+                    "Cannot eject this volume. Close files or apps using it and try again.".into()
+                } else {
+                    format!("Cannot eject volume: {detail}")
+                }
+            })
+    })
+}
+
 fn detect_cloud_locations(home: &Path) -> Vec<DetectedLocation> {
     let mut seen_canonical = HashSet::new();
     let mut candidates = Vec::new();

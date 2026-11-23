@@ -165,6 +165,7 @@ fn boxes<'a>(
                 pinned_folders: application.pinned_folders(),
                 ungranted_pins: application.ungranted_pins(),
                 locations: application.locations(),
+                ejecting: application.ejecting_volumes(),
                 safety_policy: application.safety_policy(Some(item.standalone.view)),
                 geometry,
                 interactive: workspace.can_browse(view) && application.accepts_workspace_input(),
