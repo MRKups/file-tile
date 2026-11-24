@@ -55,6 +55,7 @@ impl<T: Send + 'static> Workers<T> {
                 "opening" => Subsystem::Opening,
                 "sorting" => Subsystem::Sorting,
                 "preview" => Subsystem::Thumbnail,
+                "search" => Subsystem::Search,
                 _ => Subsystem::Metadata,
             },
             queue: Arc::new(Queue {

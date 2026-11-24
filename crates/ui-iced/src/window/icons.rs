@@ -1,5 +1,6 @@
 //! Embedded UI vector icons.
 
+use std::path::Path;
 use std::sync::OnceLock;
 
 use iced::Color;
@@ -39,15 +40,19 @@ pub enum Icon {
     Pin,
     Lock,
     Eject,
+    Search,
 }
 
 impl Icon {
     pub fn for_entry(entry: &DirectoryEntry) -> Self {
-        if entry.kind == EntryKind::Directory {
+        Self::for_path_kind(&entry.path, entry.kind)
+    }
+
+    pub fn for_path_kind(path: &Path, kind: EntryKind) -> Self {
+        if kind == EntryKind::Directory {
             return Self::Folder;
         }
-        let image = entry
-            .path
+        let image = path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| {
@@ -55,7 +60,7 @@ impl Icon {
                     .iter()
                     .any(|image| extension.eq_ignore_ascii_case(image))
             });
-        if entry.kind == EntryKind::File && image {
+        if kind == EntryKind::File && image {
             Self::Image
         } else {
             Self::Document
@@ -94,11 +99,12 @@ impl Icon {
             Self::Pin => include_bytes!("../../../../assets/icons/ui/pin.svg"),
             Self::Lock => include_bytes!("../../../../assets/icons/ui/lock.svg"),
             Self::Eject => include_bytes!("../../../../assets/icons/ui/eject.svg"),
+            Self::Search => include_bytes!("../../../../assets/icons/ui/search.svg"),
         }
     }
 
     fn handle(self) -> Handle {
-        static HANDLES: OnceLock<[Handle; 30]> = OnceLock::new();
+        static HANDLES: OnceLock<[Handle; 31]> = OnceLock::new();
         HANDLES.get_or_init(|| {
             [
                 Self::Eye,
@@ -131,6 +137,7 @@ impl Icon {
                 Self::Pin,
                 Self::Lock,
                 Self::Eject,
+                Self::Search,
             ]
             .map(|icon| Handle::from_memory(icon.bytes()))
         })[self as usize]

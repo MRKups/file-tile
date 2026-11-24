@@ -6,6 +6,8 @@ mod metadata;
 mod preview;
 mod webp_header;
 pub use preview::PreviewWorkers;
+mod search;
+pub use search::SearchWorkers;
 mod opening;
 pub use opening::OpenWorkers;
 mod native;

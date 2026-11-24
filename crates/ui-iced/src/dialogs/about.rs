@@ -77,6 +77,7 @@ impl Desktop {
             && self.native_menu.error().is_none()
             && !recovery_blocking
             && self.about.is_none()
+            && self.search.is_none()
             && self.workspace_management.is_none()
             && !self.settings_picker.pending()
             && !self.context_menu_open()

@@ -34,6 +34,13 @@ impl Desktop {
             Some(self.about_input(event.clone()))
         } else if self.app_settings.is_some() {
             Some(self.app_settings_input(event.clone(), status))
+        } else if self.search.is_some() {
+            Some(self.search_input(event.clone(), status))
+        } else if self.context_menu_open()
+            && is_open_search_shortcut(event)
+            && self.can_open_search(true)
+        {
+            Some(self.open_search())
         } else if self.sort_menu.is_some() {
             if matches!(
                 event,
@@ -68,6 +75,21 @@ impl Desktop {
             None
         }
     }
+}
+
+fn is_open_search_shortcut(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Character(ch),
+            modifiers,
+            repeat: false,
+            ..
+        }) if !modifiers.shift()
+            && !modifiers.alt()
+            && (modifiers.command() || modifiers.control())
+            && ch.eq_ignore_ascii_case("f")
+    )
 }
 
 struct State;

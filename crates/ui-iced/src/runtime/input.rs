@@ -542,6 +542,14 @@ impl Desktop {
         if self.launchers.draft.is_some() || self.file_editor_active() {
             return Task::none();
         }
+        if !modifiers.shift()
+            && !modifiers.alt()
+            && matches!(key.as_ref(), Key::Character("f" | "F"))
+            && (modifiers.command() || modifiers.control())
+            && self.can_open_search(true)
+        {
+            return self.open_search();
+        }
         if let Some(task) = self.file_key(key, modifiers) {
             return task;
         }

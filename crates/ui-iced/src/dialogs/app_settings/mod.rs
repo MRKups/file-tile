@@ -130,6 +130,7 @@ impl Desktop {
         self.native_menu.error().is_some()
             || self.about.is_some()
             || self.app_settings.is_some()
+            || self.search.is_some()
             || self.workspace_management.is_some()
             || self.storage_details && self.application.storage_detail().is_some()
     }
@@ -141,6 +142,24 @@ impl Desktop {
     }
 
     pub(crate) fn permits_ui_action(&self, action: &Action) -> bool {
+        let search_on_top = self.search.is_some()
+            && !(self.storage_details && self.application.storage_detail().is_some())
+            && self.native_menu.error().is_none()
+            && self.about.is_none()
+            && self.app_settings.is_none()
+            && self.workspace_management.is_none();
+        if search_on_top
+            && matches!(
+                action,
+                Action::SearchSystem { .. }
+                    | Action::SearchSystemCompleted(_)
+                    | Action::CancelSearch
+                    | Action::OpenSearchResult { .. }
+                    | Action::SearchResultOpened(_)
+            )
+        {
+            return true;
+        }
         // Widget messages arrive before the event subscription's modal guard.
         !(self.modal_open() || self.context_menu_open())
             || !matches!(

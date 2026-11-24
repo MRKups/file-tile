@@ -407,3 +407,37 @@ pub mod updater {
         }
     }
 }
+
+pub mod search {
+    use std::path::PathBuf;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SearchFailure {
+        Cancelled,
+        TimedOut,
+        InvalidQuery,
+        Unavailable(String),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RawSearchOutput {
+        pub paths: Vec<PathBuf>,
+        pub truncated: bool,
+    }
+
+    pub fn build_filename_predicate(query: &str) -> Result<String, SearchFailure> {
+        let _ = query;
+        Err(SearchFailure::Unavailable(
+            "System-wide filename search is not yet implemented on Linux.".into(),
+        ))
+    }
+
+    pub fn search_filenames(
+        _query: &str,
+        _is_cancelled: impl Fn() -> bool,
+    ) -> Result<RawSearchOutput, SearchFailure> {
+        Err(SearchFailure::Unavailable(
+            "System-wide filename search is not yet implemented on Linux.".into(),
+        ))
+    }
+}

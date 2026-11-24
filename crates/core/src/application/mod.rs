@@ -25,7 +25,7 @@ use contracts::{
     },
     watching,
 };
-use files::{file_operations, folder_tree, folder_usage, metadata, opening, sorting};
+use files::{file_operations, folder_tree, folder_usage, metadata, opening, search, sorting};
 use preferences::{appearance, settings, typography};
 use workspace::{box_configuration, launchers, management, scopes, tabs};
 
@@ -59,6 +59,16 @@ pub enum Action {
     RetryWorkspaceManagement,
     OpenFile(ViewId, PathBuf),
     ExternalOpened(opening::OpenCompletion),
+    SearchSystem {
+        query: String,
+    },
+    SearchSystemCompleted(search::SearchCompletion),
+    CancelSearch,
+    OpenSearchResult {
+        path: PathBuf,
+        kind: directory::EntryKind,
+    },
+    SearchResultOpened(search::SearchOpenCompletion),
     MetadataNeeded(ViewId, Vec<PathBuf>),
     MetadataCompleted(metadata::MetadataCompletion),
     EditScope(ViewId, scopes::ScopeEdit),
@@ -168,6 +178,8 @@ pub enum Effect {
     ManageWorkspace(storage::ManagementRequest),
     OpenExternal(opening::OpenRequest),
     OpenLauncher(launchers::Request),
+    SearchSystem(search::SearchRequest),
+    OpenSearchResult(search::SearchOpenRequest),
     ReadMetadata(metadata::MetadataRequest),
     ResolveScope(ListingRequest),
     ListTree(ListingRequest),
@@ -262,6 +274,7 @@ pub struct Application {
     sorting: sorting::SortBook,
     opening: opening::OpeningBook,
     launcher_opening: launchers::OpeningBook,
+    search: search::SearchBook,
     file_operations: file_operations::Operations,
     column_previews: HashMap<ViewId, Arc<DirectoryListing>>,
     management: Option<management::PendingManagement>,
@@ -308,6 +321,7 @@ impl Application {
             sorting: sorting::SortBook::default(),
             opening: opening::OpeningBook::default(),
             launcher_opening: launchers::OpeningBook::default(),
+            search: search::SearchBook::default(),
             file_operations: file_operations::Operations::default(),
             column_previews: HashMap::new(),
             management: None,
@@ -462,6 +476,7 @@ impl Application {
         self.sync_column_previews_validity();
         self.sync_opening();
         self.sync_launcher_opening();
+        self.sync_search();
         effects.extend(self.fill_metadata());
         effects
     }
@@ -488,6 +503,14 @@ impl Application {
                 path,
                 result,
             } => return self.volume_ejected(box_id, path, result),
+            Action::SearchSystemCompleted(completion) => {
+                self.search_system_completed(completion);
+                return vec![];
+            }
+            Action::SearchResultOpened(completion) => {
+                self.search_result_opened(completion);
+                return vec![];
+            }
             Action::FileOperationCompleted(receipt) => return self.files_completed(receipt),
             Action::StopFileOperation(id) => {
                 self.stop_files(id);
@@ -570,6 +593,11 @@ impl Application {
             Action::ChangeTabs(id, command) => return self.change_tabs(id, command),
             Action::OpenFile(view, path) => return self.open_file(view, path),
             Action::ExternalOpened(completion) => self.external_opened(completion),
+            Action::SearchSystem { query } => return self.search_system(query),
+            Action::CancelSearch => self.cancel_search(),
+            Action::OpenSearchResult { path, kind } => {
+                return self.open_search_result(path, kind);
+            }
             Action::MetadataNeeded(view, paths) => return self.request_metadata(view, paths),
             Action::MetadataCompleted(completion) => return self.complete_metadata(completion),
             Action::EditScope(view, edit) => return self.edit_scope(view, edit),
@@ -670,6 +698,11 @@ impl Application {
             | Action::ChangeTabs(..)
             | Action::OpenFile(..)
             | Action::ExternalOpened(_)
+            | Action::SearchSystem { .. }
+            | Action::SearchSystemCompleted(_)
+            | Action::CancelSearch
+            | Action::OpenSearchResult { .. }
+            | Action::SearchResultOpened(_)
             | Action::MetadataNeeded(..)
             | Action::MetadataCompleted(_)
             | Action::EditScope(..)

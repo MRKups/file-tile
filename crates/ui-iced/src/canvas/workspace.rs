@@ -164,6 +164,17 @@ fn overlay<'a>(
             ))
         ]
         .into()
+    } else if let Some(state) = &desktop.search {
+        stack![
+            surface,
+            opaque(crate::dialogs::search::view(
+                &desktop.application,
+                state,
+                desktop.size,
+                palette,
+            ))
+        ]
+        .into()
     } else if desktop.sort_menu.is_some() {
         stack![surface, crate::menus::sort_menu::view(desktop)].into()
     } else if desktop.tab_menu.is_some() {

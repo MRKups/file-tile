@@ -28,6 +28,7 @@ ALLOWED_COMMAND_FILES = {
     Path("crates/platform-macos/src/folder_usage.rs"),
     Path("crates/platform-macos/src/opening.rs"),
     Path("crates/platform-macos/src/permissions.rs"),
+    Path("crates/platform-macos/src/search.rs"),
     Path("crates/core/src/persistence/tests/storage.rs"),
 }
 

@@ -17,6 +17,7 @@ pub mod moving;
 mod opening;
 pub mod permissions;
 pub mod renaming;
+pub mod search;
 mod system_font;
 pub mod trash;
 pub mod updater;

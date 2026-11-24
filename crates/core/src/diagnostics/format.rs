@@ -48,6 +48,7 @@ impl Event {
             Subsystem::Storage => "configuration-storage",
             Subsystem::Files => "file-operation",
             Subsystem::Opening => "file-opening",
+            Subsystem::Search => "search",
         };
         let mut line = format!(
             "{} {severity:<5} {component} - {text} pid={} elapsed_ms={}",

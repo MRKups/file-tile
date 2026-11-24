@@ -182,6 +182,9 @@ enum Message {
     ConfirmStartup,
     CancelStartupConfirmation,
     About(about::Action),
+    Search(dialogs::search::Action),
+    SearchCompleted(crate::application::files::search::SearchCompletion),
+    SearchResultOpened(crate::application::files::search::SearchOpenCompletion),
     OpenAppSettings,
     AppSettingsChanged(String),
     AppAppearanceEdited(app_settings::AppearanceEdit),
@@ -301,6 +304,9 @@ struct Desktop {
     pending_open: Option<opening::Pending>,
     location_workers: Option<Arc<crate::filesystem::LocationWorkers>>,
     pending_locations: Option<startup::PendingLocations>,
+    search_workers: Option<Arc<crate::filesystem::SearchWorkers>>,
+    pending_search: Option<startup::PendingSearch>,
+    pending_search_open: Option<startup::PendingSearchOpen>,
     metadata_workers: Option<Arc<crate::filesystem::MetadataWorkers>>,
     metadata_reads: HashMap<ViewId, metadata::Pending>,
     configuration_reads: HashMap<u64, PendingRead>,
@@ -324,6 +330,7 @@ struct Desktop {
     window_appearance: window_appearance::Capability,
     system_appearance: crate::application::preferences::appearance::SystemAppearance,
     about: Option<about::State>,
+    search: Option<dialogs::search::State>,
     app_settings: Option<app_settings::Draft>,
     workspace_management: Option<workspace_management::Draft>,
     box_settings: Option<box_settings::Draft>,
@@ -378,6 +385,9 @@ impl Desktop {
             pending_open: None,
             location_workers: None,
             pending_locations: None,
+            search_workers: None,
+            pending_search: None,
+            pending_search_open: None,
             metadata_workers: None,
             metadata_reads: HashMap::new(),
             configuration_reads: HashMap::new(),
@@ -402,6 +412,7 @@ impl Desktop {
             system_appearance:
                 crate::application::preferences::appearance::SystemAppearance::default(),
             about: None,
+            search: None,
             app_settings: None,
             workspace_management: None,
             box_settings: None,
@@ -457,6 +468,7 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
     let thumbnail_workers = Arc::new(crate::filesystem::PreviewWorkers::new()?);
     let usage_workers = Arc::new(crate::filesystem::folder_usage::UsageWorkers::new()?);
     let location_workers = Arc::new(crate::filesystem::LocationWorkers::new()?);
+    let search_workers = Arc::new(crate::filesystem::SearchWorkers::new()?);
     let boot = move || {
         let (mut desktop, task) =
             startup::boot(&launch, DirectoryBackend::Native(Arc::clone(&workers)));
@@ -465,6 +477,7 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
         desktop.usage_runtime.workers = Some(Arc::clone(&usage_workers));
         desktop.open_workers = Some(Arc::clone(&open_workers));
         desktop.location_workers = Some(Arc::clone(&location_workers));
+        desktop.search_workers = Some(Arc::clone(&search_workers));
         desktop.file_worker = Some(Arc::clone(&file_worker));
         desktop.thumbnails.workers = Some(Arc::clone(&thumbnail_workers));
         desktop.system_font = system_font.clone();
@@ -791,6 +804,9 @@ impl Desktop {
             | Message::RetryWorkspaceManagement
             | Message::CancelWorkspaceManagement) => self.workspace_management_message(message),
             Message::About(action) => self.about_message(action),
+            Message::Search(action) => self.search_message(action),
+            Message::SearchCompleted(completion) => self.search_completed(completion),
+            Message::SearchResultOpened(completion) => self.search_result_opened(completion),
             message @ (Message::OpenAppSettings
             | Message::AppSettingsChanged(_)
             | Message::AppAppearanceEdited(_)
@@ -872,6 +888,7 @@ impl Desktop {
             self.sync_app_settings_locations();
         }
         self.apply_eject_feedback(ejected_feedback);
+        self.refresh_open_tile_search();
         let switched = epoch_before != self.application.workspace_epoch() && !restored;
         if switched {
             self.clear_workspace_context();
@@ -940,6 +957,53 @@ impl Desktop {
         }
     }
 
+    fn search_completed(
+        &mut self,
+        completion: crate::application::files::search::SearchCompletion,
+    ) -> Task<Message> {
+        self.pending_search = None;
+        let task = self.dispatch(Action::SearchSystemCompleted(completion));
+        if let Some(state) = &mut self.search {
+            state.clamp_selection(&self.application);
+        }
+        task
+    }
+
+    fn search_result_opened(
+        &mut self,
+        completion: crate::application::files::search::SearchOpenCompletion,
+    ) -> Task<Message> {
+        self.pending_search_open = None;
+        let succeeded = completion.result.is_ok();
+        let task = self.dispatch(Action::SearchResultOpened(completion));
+        let obstructed = (self.storage_details && self.application.storage_detail().is_some())
+            || self.native_menu.error().is_some()
+            || self.about.is_some()
+            || self.app_settings.is_some()
+            || self.workspace_management.is_some();
+        if succeeded && self.search.is_some() && !obstructed {
+            return Task::batch([task, self.close_search()]);
+        }
+        task
+    }
+
+    fn refresh_open_tile_search(&mut self) {
+        if let Some(state) = &mut self.search
+            && state.has_query()
+        {
+            state.open_tiles = self.application.search_open_tiles(&state.query);
+            state.clamp_selection(&self.application);
+        }
+    }
+
+    fn clear_search_overlay(&mut self) {
+        self.pending_search = None;
+        self.pending_search_open = None;
+        if self.search.take().is_some() {
+            self.application.update(Action::CancelSearch);
+        }
+    }
+
     fn finish_dispatch_focus(
         &mut self,
         restored: bool,
@@ -988,6 +1052,7 @@ impl Desktop {
         self.configuration_reads.clear();
         self.metadata_reads.clear();
         self.pending_open = None;
+        self.clear_search_overlay();
         self.launchers = launchers::Runtime::default();
         self.box_settings = None;
         self.tab_drag = None;
@@ -1021,6 +1086,7 @@ impl Desktop {
         if closing {
             self.pending_reads.clear();
             self.pending_locations = None;
+            self.clear_search_overlay();
             self.column_previews.clear_pending();
         }
         self.sync_configuration_dialogs(restored, new_save_failure);
@@ -1046,6 +1112,7 @@ impl Desktop {
             || restored && self.application.can_retry_startup()
         {
             self.about = None;
+            self.clear_search_overlay();
             self.application.update(Action::CancelAppSettings);
             self.app_settings = None;
             if !self.application.workspace_management_pending() {
@@ -1061,6 +1128,11 @@ impl Desktop {
         }
         if !self.application.app_settings_open() {
             self.app_settings = None;
+        }
+        if !self.application.accepts_edits()
+            || self.application.workspace().mode() != crate::domain::Mode::Browse
+        {
+            self.clear_search_overlay();
         }
         if self.modal_open() {
             self.window_drag = WindowDrag::Idle;

@@ -28,6 +28,30 @@ impl Drop for PendingLocations {
     }
 }
 
+pub(crate) struct PendingSearch {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingSearch {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
+
+pub(crate) struct PendingSearchOpen {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingSearchOpen {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
+
 pub(crate) fn boot(launch: &Launch, directory: DirectoryBackend) -> (Desktop, Task<Message>) {
     let (mut application, effects) =
         Application::with_storage(launch.directory.clone(), launch.home.clone());
@@ -208,6 +232,8 @@ impl Desktop {
             ),
             Effect::OpenExternal(request) => self.external_task(request),
             Effect::OpenLauncher(request) => self.open_launcher_task(request),
+            Effect::SearchSystem(request) => self.search_system_task(request),
+            Effect::OpenSearchResult(request) => self.open_search_result_task(request),
             Effect::ReadMetadata(request) => self.read_metadata(request),
             Effect::ListTree(request) => self.configuration_read(request, false),
             Effect::ResolveScope(request) => self.configuration_read(request, true),
@@ -288,6 +314,63 @@ impl Desktop {
         })
         .abortable();
         self.pending_locations = Some(PendingLocations {
+            cancellation,
+            handle,
+        });
+        task
+    }
+
+    fn search_system_task(
+        &mut self,
+        request: crate::application::files::search::SearchRequest,
+    ) -> Task<Message> {
+        self.pending_search = None;
+        let generation = request.generation;
+        let Some(workers) = &self.search_workers else {
+            return Task::done(Message::SearchCompleted(
+                crate::application::files::search::SearchCompletion {
+                    generation,
+                    result: Err("Spotlight search is unavailable right now.".into()),
+                },
+            ));
+        };
+        let (cancellation, future) = workers.search(request);
+        let (task, handle) = Task::perform(future, move |completion| {
+            Message::SearchCompleted(completion.unwrap_or(
+                crate::application::files::search::SearchCompletion {
+                    generation: 0,
+                    result: Err(String::new()),
+                },
+            ))
+        })
+        .abortable();
+        self.pending_search = Some(PendingSearch {
+            cancellation,
+            handle,
+        });
+        task
+    }
+
+    fn open_search_result_task(
+        &mut self,
+        request: crate::application::files::search::SearchOpenRequest,
+    ) -> Task<Message> {
+        self.pending_search_open = None;
+        let Some(workers) = &self.open_workers else {
+            return Task::done(Message::SearchResultOpened(
+                crate::application::files::search::SearchOpenCompletion {
+                    request,
+                    result: Err(
+                        "Cannot open this item: the opening service is unavailable. Relaunch and retry."
+                            .into(),
+                    ),
+                },
+            ));
+        };
+        let future = workers.open_search_result(request);
+        let cancellation = future.cancellation();
+        let (task, handle) = Task::perform(future, Message::SearchResultOpened).abortable();
+        self.pending_search_open = Some(PendingSearchOpen {
             cancellation,
             handle,
         });
