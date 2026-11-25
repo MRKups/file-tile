@@ -27,7 +27,7 @@ mod management;
 pub(super) struct Store {
     root: PathBuf,
     config: PathBuf,
-    _lock: File,
+    lock: File,
     active: Option<(SessionId, WorkspaceId)>,
     writable: bool,
     baselines: Vec<(ConfigKey, Vec<u8>)>,
@@ -73,7 +73,7 @@ impl Store {
         Ok(Self {
             root: root.into(),
             config,
-            _lock: lock,
+            lock,
             active: None,
             writable: false,
             baselines: Vec::new(),
@@ -466,7 +466,7 @@ impl Store {
         let lock = checked_file(&self.config.join(".writer.lock"), false)?;
         #[cfg(unix)]
         {
-            let held = self._lock.metadata()?;
+            let held = self.lock.metadata()?;
             let current = lock.metadata()?;
             if held.dev() != current.dev() || held.ino() != current.ino() {
                 return Err(StorageFailure::ChangedExternally);
@@ -474,6 +474,14 @@ impl Store {
         }
         drop(lock);
         Ok(())
+    }
+}
+
+impl Drop for Store {
+    fn drop(&mut self) {
+        // Release the advisory lock before closing the descriptor so a concurrent
+        // subprocess spawn cannot keep the lock alive until exec closes O_CLOEXEC handles.
+        let _ = self.lock.unlock();
     }
 }
 
