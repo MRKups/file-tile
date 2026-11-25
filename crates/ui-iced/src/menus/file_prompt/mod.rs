@@ -9,7 +9,9 @@ use crate::{
     widgets::focus_control, window::appearance as a, window::icons,
 };
 use iced::Element;
-use iced::widget::{button, column, container, opaque, row, scrollable, text_input};
+use iced::widget::{
+    button, column, container, opaque, rich_text, row, scrollable, span, text_input,
+};
 
 pub(crate) const PANEL_ID: &str = "box-file-prompt";
 pub(crate) const BLOCK_ID: &str = "box-file-input-shield";
@@ -122,6 +124,24 @@ fn with_icon<'a>(
     .into()
 }
 
+fn emphasized_heading<'a>(
+    prefix: &'a str,
+    target: impl iced::advanced::text::IntoFragment<'a>,
+    suffix: &'a str,
+    palette: a::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
+    rich_text![
+        span(prefix).color(palette.text),
+        span(target).color(palette.accent),
+        span(suffix).color(palette.text),
+    ]
+    .on_link_click(iced::never)
+    .font(ty.heading_font())
+    .size(ty.size(crate::window::typography::BODY_SIZE))
+    .into()
+}
+
 fn item_icon(item: &Item) -> icons::Icon {
     match item {
         Item::Copy(_) => icons::Icon::Copy,
@@ -154,13 +174,20 @@ fn running_content<'a>(
         })
         .font(ty.heading_font()),
         ty.text(job.name.clone())
+            .color(palette.accent)
             .wrapping(iced::widget::text::Wrapping::None),
-        ty.caption(if matches!(job.item, Item::Trash(_)) {
-            format!("From: {}", job.directory.display())
-        } else {
-            format!("To: {}", job.directory.display())
-        })
-        .color(palette.muted)
+        rich_text![
+            span(if matches!(job.item, Item::Trash(_)) {
+                "From: "
+            } else {
+                "To: "
+            })
+            .color(palette.muted),
+            span(job.directory.display().to_string()).color(palette.text),
+        ]
+        .on_link_click(iced::never)
+        .font(ty.font())
+        .size(ty.size(crate::window::typography::CAPTION_SIZE))
         .wrapping(iced::widget::text::Wrapping::None),
         ty.caption(format!(
             "{} completed · {} skipped · {} total",
@@ -256,13 +283,27 @@ fn name_content<'a>(
         .on_input(move |value| Message::NameChanged(view, generation, value))
         .on_submit(Message::SubmitName(view, generation))
         .style(move |_, status| field_style::field(palette, status, draft.error.is_some()));
-    let mut copy = column![
-        ty.text(draft.purpose.title())
+    let heading = match &draft.purpose {
+        file_actions::NamePurpose::Rename(source) => match source.file_name() {
+            Some(name) => emphasized_heading(
+                "Rename “",
+                name.to_string_lossy().into_owned(),
+                "”",
+                palette,
+            ),
+            None => ty
+                .text(draft.purpose.title())
+                .font(ty.heading_font())
+                .color(palette.text)
+                .into(),
+        },
+        file_actions::NamePurpose::Create(_) => ty
+            .text(draft.purpose.title())
             .font(ty.heading_font())
-            .color(palette.text),
-        field,
-    ]
-    .spacing(8);
+            .color(palette.text)
+            .into(),
+    };
+    let mut copy = column![heading, field].spacing(8);
     if let Some(error) = &draft.error {
         copy = copy.push(ty.caption(error).color(palette.error));
     }
@@ -297,11 +338,16 @@ fn trash_content<'a>(
     let ty = palette.typography;
     let generation = draft.generation;
     let heading = if let [(_, name)] = draft.items.as_slice() {
-        format!("Move “{name}” to Trash?")
+        emphasized_heading("Move “", name.as_str(), "” to Trash?", palette)
     } else {
-        format!("Move {} items to Trash?", draft.items.len())
+        emphasized_heading(
+            "Move ",
+            format!("{} items", draft.items.len()),
+            " to Trash?",
+            palette,
+        )
     };
-    let mut copy = column![ty.text(heading).font(ty.heading_font()).color(palette.text)].spacing(4);
+    let mut copy = column![heading].spacing(4);
     if let Some(error) = &draft.error {
         copy = copy.push(ty.caption(error).color(palette.error));
     }
@@ -347,9 +393,7 @@ fn conflict_content<'a>(
         .on_submit(Message::KeepBoth(id, step))
         .style(move |_, status| field_style::field(palette, status, invalid));
     let mut copy = column![
-        ty.text(format!("“{}” already exists.", job.name))
-            .font(ty.heading_font())
-            .color(palette.text),
+        emphasized_heading("“", job.name.as_str(), "” already exists.", palette),
         field,
     ]
     .spacing(8);
