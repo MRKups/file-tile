@@ -23,7 +23,23 @@ const SPACING: f32 = 6.0;
 const WORKSPACE_WIDTH: f32 =
     TOOLS.len() as f32 * icon_button::TOOL_TARGET + (TOOLS.len() - 1) as f32 * SPACING;
 const GROUP_GAP: f32 = 12.0;
-pub const WIDTH: f32 = WORKSPACE_WIDTH + 2.0 * GROUP_GAP + 1.0 + icon_button::TOOL_TARGET;
+const SEPARATOR_SPAN: f32 = 2.0 * GROUP_GAP + 1.0;
+pub const WIDTH: f32 = icon_button::TOOL_TARGET
+    + SEPARATOR_SPAN
+    + WORKSPACE_WIDTH
+    + SEPARATOR_SPAN
+    + icon_button::TOOL_TARGET;
+
+#[derive(Debug, Clone, Copy)]
+pub struct State {
+    pub active: Mode,
+    pub search_enabled: bool,
+    pub search_open: bool,
+    pub workspace_enabled: bool,
+    pub settings_enabled: bool,
+    pub storage_attention: bool,
+    pub recovery_enabled: bool,
+}
 
 impl Tool {
     fn icon(self) -> Icon {
@@ -51,22 +67,32 @@ impl Tool {
     }
 }
 
-pub fn view(
-    active: Mode,
-    workspace_enabled: bool,
-    settings_enabled: bool,
-    storage_attention: bool,
-    recovery_enabled: bool,
-    palette: a::Palette,
-) -> Element<'static, Message> {
+pub fn view(state: State, palette: a::Palette) -> Element<'static, Message> {
+    let search = icon_button::themed(
+        Icon::Search,
+        if state.active != Mode::Browse {
+            "Search · Available in Browse mode"
+        } else {
+            "Search · ⌘F"
+        },
+        state
+            .search_enabled
+            .then_some(Message::Search(crate::dialogs::search::Action::Open)),
+        Treatment::Tool {
+            selected: state.search_open,
+        },
+        palette,
+    );
     let workspace_tools = Row::with_children(TOOLS.map(|tool| {
         let mode = tool.mode();
         icon_button::themed(
             tool.icon(),
             tool.label(),
-            workspace_enabled.then_some(Message::Action(Action::SelectMode(mode))),
+            state
+                .workspace_enabled
+                .then_some(Message::Action(Action::SelectMode(mode))),
             Treatment::Tool {
-                selected: mode == active,
+                selected: mode == state.active,
             },
             palette,
         )
@@ -74,21 +100,21 @@ pub fn view(
     .spacing(SPACING);
     let settings = icon_button::themed(
         Icon::Cog,
-        if recovery_enabled {
+        if state.recovery_enabled {
             "Workspace recovery · Open details"
-        } else if storage_attention {
+        } else if state.storage_attention {
             "Application settings · Workspace not saved"
-        } else if settings_enabled {
+        } else if state.settings_enabled {
             "Application settings"
         } else {
             "Application settings · Saved configuration must be ready"
         },
-        if recovery_enabled {
+        if state.recovery_enabled {
             Some(Message::StorageDetails(true))
         } else {
-            settings_enabled.then_some(Message::OpenAppSettings)
+            state.settings_enabled.then_some(Message::OpenAppSettings)
         },
-        if storage_attention {
+        if state.storage_attention {
             Treatment::Warning
         } else {
             Treatment::Tool { selected: false }
@@ -96,6 +122,8 @@ pub fn view(
         palette,
     );
     Row::new()
+        .push(search)
+        .push(container(rule::vertical(1).style(move |_| palette.rule())).height(20))
         .push(workspace_tools)
         .push(container(rule::vertical(1).style(move |_| palette.rule())).height(20))
         .push(settings)

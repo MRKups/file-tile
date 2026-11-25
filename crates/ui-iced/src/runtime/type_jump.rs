@@ -121,18 +121,9 @@ impl State {
             .map(|(view, path)| (*view, path.clone()))
     }
 
-    pub(crate) fn target_view(&self) -> Option<ViewId> {
-        match &self.session.as_ref()?.target {
-            SessionTarget::AllBoxes => None,
-            SessionTarget::Primary { view, .. } | SessionTarget::ColumnPreview { view, .. } => {
-                Some(*view)
-            }
-        }
-    }
-
     pub(crate) fn hud_props(
         &self,
-        placement: keystroke_hud::Placement,
+        slot: iced::Rectangle,
         glow_clip: Option<iced::Rectangle>,
         matched_boxes: Vec<iced::Rectangle>,
         palette: a::Palette,
@@ -141,7 +132,7 @@ impl State {
         Some(keystroke_hud::Props {
             query: &session.query,
             match_count: session.match_count,
-            placement,
+            slot,
             glow_clip,
             matched_boxes,
             fade: session.fade,
@@ -174,46 +165,6 @@ struct EntryScrollBounds {
 }
 
 impl Desktop {
-    pub(crate) fn type_jump_hud_placement(&self) -> keystroke_hud::Placement {
-        let Some(view) = self.type_jump.target_view() else {
-            return keystroke_hud::Placement::Window;
-        };
-        let Some(item) = self.application.workspace().box_for_view(view) else {
-            return keystroke_hud::Placement::Hidden;
-        };
-        let geometry = self.geometry();
-        let scroller = folder_box::scroller_geometry(geometry, item);
-        let box_rect = geometry.rect(item.rect);
-        let projected = iced::Rectangle {
-            x: box_rect.x + geometry.viewport.x - geometry.offset.x,
-            y: box_rect.y + geometry.viewport.y - geometry.offset.y,
-            width: box_rect.width,
-            height: box_rect.height,
-        };
-        let Some(visible) = projected.intersection(&geometry.viewport) else {
-            return keystroke_hud::Placement::Hidden;
-        };
-        if visible.width < 56.0 || visible.height < 36.0 {
-            return keystroke_hud::Placement::Hidden;
-        }
-        let min_bottom = if scroller.compact { 6.0 } else { 10.0 };
-        let desired_bottom = if scroller.compact {
-            8.0
-        } else {
-            (scroller.footer_height + 10.0).min((projected.height - 36.0).max(8.0))
-        };
-        let bottom_clipped = ((projected.y + projected.height)
-            - (geometry.viewport.y + geometry.viewport.height))
-            .max(0.0);
-        let bottom_offset = (desired_bottom - bottom_clipped)
-            .max(min_bottom)
-            .min((visible.height - 32.0).max(0.0));
-        keystroke_hud::Placement::InBox {
-            bounds: visible,
-            bottom_offset,
-        }
-    }
-
     pub(crate) fn type_jump_matched_boxes(
         &self,
     ) -> (Option<iced::Rectangle>, Vec<iced::Rectangle>) {

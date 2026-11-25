@@ -40,8 +40,14 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
                 &desktop.application,
                 desktop.size.width,
                 geometry.header_height,
-                desktop.workspace_input_enabled() && desktop.application.file_operation().is_none(),
-                desktop.application.can_configure_application() && !desktop.modal_open(),
+                workspace_header::Controls {
+                    search_enabled: desktop.can_open_search(true),
+                    search_open: desktop.search.is_some(),
+                    workspace_enabled: desktop.workspace_input_enabled()
+                        && desktop.application.file_operation().is_none(),
+                    settings_enabled: desktop.application.can_configure_application()
+                        && !desktop.modal_open(),
+                },
                 palettes.window
             ),
             container(super::surface::view(

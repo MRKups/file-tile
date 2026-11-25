@@ -1,4 +1,4 @@
-//! Passive bottom-center keystroke overlay for Browse type-to-jump navigation.
+//! Passive top-header keystroke overlay for Browse type-to-jump navigation.
 
 use std::time::Instant;
 
@@ -14,38 +14,26 @@ use iced::{
 
 use crate::{Desktop, Message, typography::CAPTION_SIZE, window::appearance as a};
 
-const WINDOW_BOTTOM_OFFSET: f32 = 28.0;
-const WINDOW_SIDE_MARGIN: f32 = 24.0;
 const MAX_QUERY_WIDTH: f32 = 320.0;
 const COUNT_FONT_SIZE: f32 = CAPTION_SIZE;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Placement {
-    Window,
-    InBox {
-        bounds: Rectangle,
-        bottom_offset: f32,
-    },
-    Hidden,
-}
 
 pub(crate) fn view(desktop: &Desktop, palette: a::Palette) -> Element<'_, Message> {
     if desktop.modal_open() {
         return space().into();
     }
-    let placement = desktop.type_jump_hud_placement();
+    let slot = crate::canvas::workspace_header::center_slot(desktop.size.width);
     let (glow_clip, matched_boxes) = desktop.type_jump_matched_boxes();
     render(
         desktop
             .type_jump
-            .hud_props(placement, glow_clip, matched_boxes, palette),
+            .hud_props(slot, glow_clip, matched_boxes, palette),
     )
 }
 
 pub(crate) struct Props<'a> {
     pub query: &'a str,
     pub match_count: usize,
-    pub placement: Placement,
+    pub slot: Rectangle,
     pub glow_clip: Option<Rectangle>,
     pub matched_boxes: Vec<Rectangle>,
     pub fade: f32,
@@ -85,47 +73,19 @@ pub(crate) fn render<'a>(props: Option<Props<'a>>) -> Element<'a, Message> {
 }
 
 fn place_card<'a>(props: &Props<'a>, fade: f32) -> Element<'a, Message> {
-    match props.placement {
-        Placement::Hidden => space().into(),
-        Placement::Window => {
-            let hud_card = build_card(props, fade, MAX_QUERY_WIDTH);
-            container(hud_card)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::End)
-                .padding(Padding {
-                    top: 0.0,
-                    right: WINDOW_SIDE_MARGIN,
-                    bottom: WINDOW_BOTTOM_OFFSET,
-                    left: WINDOW_SIDE_MARGIN,
-                })
-                .into()
-        }
-        Placement::InBox {
-            bounds,
-            bottom_offset,
-        } => {
-            let side_margin = (bounds.width * 0.06).clamp(8.0, 16.0);
-            let max_query = (bounds.width - side_margin * 2.0 - 48.0).clamp(32.0, MAX_QUERY_WIDTH);
-            let hud_card = build_card(props, fade, max_query);
-            pin(container(hud_card)
-                .width(bounds.width)
-                .height(bounds.height)
-                .align_x(Alignment::Center)
-                .align_y(Alignment::End)
-                .padding(Padding {
-                    top: 0.0,
-                    right: side_margin,
-                    bottom: bottom_offset,
-                    left: side_margin,
-                })
-                .clip(true))
-            .x(bounds.x)
-            .y(bounds.y)
-            .into()
-        }
+    if props.slot.width < 56.0 {
+        return space().into();
     }
+    let max_query = (props.slot.width - 48.0).clamp(32.0, MAX_QUERY_WIDTH);
+    let hud_card = build_card(props, fade, max_query);
+    pin(container(hud_card)
+        .width(props.slot.width)
+        .height(props.slot.height)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center))
+    .x(props.slot.x)
+    .y(props.slot.y)
+    .into()
 }
 
 fn build_card<'a>(props: &Props<'a>, fade: f32, max_query_width: f32) -> Element<'a, Message> {
@@ -165,7 +125,7 @@ fn build_card<'a>(props: &Props<'a>, fade: f32, max_query_width: f32) -> Element
         palette.error.scale_alpha(0.55 * fade)
     };
     container(content_row)
-        .padding(Padding::from([6.0, 12.0]))
+        .padding(Padding::from([4.0, 12.0]))
         .style(move |_| container::Style {
             background: Some(palette.contrast_background.scale_alpha(0.88 * fade).into()),
             border: Border {
@@ -175,8 +135,8 @@ fn build_card<'a>(props: &Props<'a>, fade: f32, max_query_width: f32) -> Element
             },
             shadow: Shadow {
                 color: Color::BLACK.scale_alpha(0.14 * fade),
-                offset: Vector::new(0.0, 4.0),
-                blur_radius: 14.0,
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 10.0,
             },
             ..container::Style::default()
         })

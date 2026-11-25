@@ -10,9 +10,10 @@ use crate::domain::Mode;
 use crate::domain::SafetyPolicy;
 use crate::domain::matching::{MatchTier, match_name};
 
-pub const MAX_OPEN_TILE_RESULTS: usize = 200;
-pub const MAX_THIS_MAC_RESULTS: usize = 60;
+pub const MAX_OPEN_TILE_RESULTS: usize = 250;
+pub const MAX_THIS_MAC_RESULTS: usize = 250;
 pub const MAX_QUERY_BYTES: usize = 256;
+pub const MIN_SYSTEM_QUERY_CHARS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchResult {
@@ -97,6 +98,11 @@ pub(in crate::application) struct SearchBook {
 /// Trims surrounding whitespace so empty/whitespace-only search queries collapse consistently.
 pub fn normalize_query(raw: &str) -> &str {
     raw.trim()
+}
+
+/// Returns whether `raw` has enough non-whitespace characters to trigger `This Mac` search.
+pub fn meets_system_query_minimum(raw: &str) -> bool {
+    normalize_query(raw).chars().count() >= MIN_SYSTEM_QUERY_CHARS
 }
 
 /// Formats `path`'s parent directory concisely, collapsing `home` prefixes to `~`.
@@ -197,7 +203,7 @@ impl Application {
             self.search.opening = None;
         }
         let trimmed = normalize_query(&query);
-        if trimmed.is_empty() {
+        if !meets_system_query_minimum(trimmed) {
             self.search.query.clear();
             self.search.status = SystemSearchStatus::Idle;
             return Vec::new();

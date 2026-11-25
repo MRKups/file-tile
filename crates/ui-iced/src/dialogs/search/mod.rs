@@ -10,7 +10,7 @@ use iced::widget::operation;
 use iced::{Event, Task};
 
 use crate::application::files::search::{
-    OpenTilesMatches, SearchResult, SystemSearchStatus, normalize_query,
+    OpenTilesMatches, SearchResult, SystemSearchStatus, meets_system_query_minimum, normalize_query,
 };
 use crate::application::{Action as AppAction, Application};
 use crate::domain::{Mode, ViewId};
@@ -21,11 +21,15 @@ pub(crate) use view::view;
 
 const DEBOUNCE_DELAY: Duration = Duration::from_millis(135);
 const INPUT_ID: &str = "global-search-input";
+pub(super) const INITIAL_VISIBLE_RESULTS: usize = 25;
+pub(super) const EXPAND_RESULTS_STEP: usize = 50;
 
 #[derive(Debug)]
 pub(crate) struct State {
     pub(crate) query: String,
     pub(crate) open_tiles: OpenTilesMatches,
+    pub(super) open_tiles_limit: usize,
+    pub(super) system_limit: usize,
     pub(super) selected_index: usize,
     pub(super) debounce_deadline: Option<Instant>,
     pub(super) hide_open_error: bool,
@@ -37,6 +41,8 @@ impl State {
         Self {
             query: String::new(),
             open_tiles: OpenTilesMatches::default(),
+            open_tiles_limit: INITIAL_VISIBLE_RESULTS,
+            system_limit: INITIAL_VISIBLE_RESULTS,
             selected_index: 0,
             debounce_deadline: None,
             hide_open_error: false,
@@ -46,6 +52,23 @@ impl State {
 
     pub(crate) fn has_query(&self) -> bool {
         !normalize_query(&self.query).is_empty()
+    }
+
+    pub(super) fn visible_open_tiles(&self) -> &[SearchResult] {
+        let count = self.open_tiles.results.len().min(self.open_tiles_limit);
+        &self.open_tiles.results[..count]
+    }
+
+    pub(super) fn visible_system_results<'a>(
+        &self,
+        application: &'a Application,
+    ) -> &'a [SearchResult] {
+        if !meets_system_query_minimum(&self.query) || self.debounce_deadline.is_some() {
+            return &[];
+        }
+        let all = system_results(application);
+        let count = all.len().min(self.system_limit);
+        &all[..count]
     }
 
     pub(crate) fn clamp_selection(&mut self, application: &Application) {
@@ -61,12 +84,7 @@ impl State {
         if !self.has_query() {
             return 0;
         }
-        let sys_len = if self.debounce_deadline.is_none() {
-            system_results(application).len()
-        } else {
-            0
-        };
-        self.open_tiles.results.len() + sys_len
+        self.visible_open_tiles().len() + self.visible_system_results(application).len()
     }
 
     fn result_at<'a>(
@@ -74,13 +92,12 @@ impl State {
         application: &'a Application,
         index: usize,
     ) -> Option<&'a SearchResult> {
-        let open_len = self.open_tiles.results.len();
-        if index < open_len {
-            self.open_tiles.results.get(index)
-        } else if self.debounce_deadline.is_none() {
-            system_results(application).get(index - open_len)
+        let visible_open = self.visible_open_tiles();
+        if index < visible_open.len() {
+            visible_open.get(index)
         } else {
-            None
+            self.visible_system_results(application)
+                .get(index - visible_open.len())
         }
     }
 }
@@ -94,9 +111,12 @@ fn system_results(application: &Application) -> &[SearchResult] {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
+    Open,
     Close,
     QueryChanged(String),
     DebounceTick(Instant),
+    ShowMoreOpenTiles,
+    ShowMoreThisMac,
     ActivateSelected,
     ActivateIndex(usize),
 }
@@ -149,9 +169,12 @@ impl Desktop {
 
     pub(crate) fn search_message(&mut self, action: Action) -> Task<Message> {
         match action {
+            Action::Open => self.open_search(),
             Action::Close => self.close_search(),
             Action::QueryChanged(query) => self.search_query_changed(query),
             Action::DebounceTick(now) => self.search_debounce_tick(now),
+            Action::ShowMoreOpenTiles => self.show_more_open_tiles(),
+            Action::ShowMoreThisMac => self.show_more_this_mac(),
             Action::ActivateSelected => {
                 let Some(selected) = self.search.as_ref().map(|state| state.selected_index) else {
                     return Task::none();
@@ -169,6 +192,8 @@ impl Desktop {
         };
         state.query = query;
         state.open_tiles = open_tiles;
+        state.open_tiles_limit = INITIAL_VISIBLE_RESULTS;
+        state.system_limit = INITIAL_VISIBLE_RESULTS;
         state.selected_index = 0;
         state.hide_open_error = true;
         self.pending_search = None;
@@ -177,8 +202,38 @@ impl Desktop {
             self.application.update(AppAction::CancelSearch);
             return Task::none();
         }
+        if !meets_system_query_minimum(&state.query) {
+            state.debounce_deadline = None;
+            self.application.update(AppAction::CancelSearch);
+            return view::reset_scroll();
+        }
         state.debounce_deadline = Some(Instant::now() + DEBOUNCE_DELAY);
         view::reset_scroll()
+    }
+
+    fn show_more_open_tiles(&mut self) -> Task<Message> {
+        let Some(state) = &mut self.search else {
+            return Task::none();
+        };
+        let old_open = state.visible_open_tiles().len();
+        state.open_tiles_limit = state.open_tiles_limit.saturating_add(EXPAND_RESULTS_STEP);
+        let new_open = state.visible_open_tiles().len();
+        if state.selected_index >= old_open {
+            state.selected_index = state
+                .selected_index
+                .saturating_add(new_open.saturating_sub(old_open));
+        }
+        state.clamp_selection(&self.application);
+        operation::focus(INPUT_ID)
+    }
+
+    fn show_more_this_mac(&mut self) -> Task<Message> {
+        let Some(state) = &mut self.search else {
+            return Task::none();
+        };
+        state.system_limit = state.system_limit.saturating_add(EXPAND_RESULTS_STEP);
+        state.clamp_selection(&self.application);
+        operation::focus(INPUT_ID)
     }
 
     fn search_debounce_tick(&mut self, now: Instant) -> Task<Message> {

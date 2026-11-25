@@ -16,10 +16,12 @@ use iced::{
     window,
 };
 
-use super::{Action, INPUT_ID, State, system_results};
+use super::{Action, EXPAND_RESULTS_STEP, INPUT_ID, State};
 use crate::Message;
 use crate::application::Application;
-use crate::application::files::search::{SearchResult, SystemSearchStatus};
+use crate::application::files::search::{
+    SearchResult, SystemSearchStatus, meets_system_query_minimum,
+};
 use crate::window::appearance as a;
 use crate::window::icons::{self, Icon};
 
@@ -213,17 +215,15 @@ fn results_body<'a>(
     }
 
     let mut list = column![].spacing(4).width(Fill);
-    let open_count = state.open_tiles.results.len();
-    let open_count_label = if state.open_tiles.truncated {
-        format!("{open_count}+")
-    } else {
-        open_count.to_string()
-    };
+    let visible_open = state.visible_open_tiles();
+    let total_open = state.open_tiles.results.len();
+    let open_count_label =
+        section_count_label(visible_open.len(), total_open, state.open_tiles.truncated);
     list = list.push(section_header("OPEN TILES", open_count_label, palette));
-    if state.open_tiles.results.is_empty() {
+    if visible_open.is_empty() {
         list = list.push(empty_status("No matches in open tiles", palette));
     } else {
-        for (index, item) in state.open_tiles.results.iter().enumerate() {
+        for (index, item) in visible_open.iter().enumerate() {
             list = list.push(result_row(
                 item,
                 index,
@@ -231,6 +231,14 @@ fn results_body<'a>(
                 palette,
             ));
         }
+        list = push_section_footer(
+            list,
+            visible_open.len(),
+            total_open,
+            state.open_tiles.truncated,
+            Action::ShowMoreOpenTiles,
+            palette,
+        );
     }
 
     list = list.push(
@@ -238,7 +246,7 @@ fn results_body<'a>(
             .padding([4, 0])
             .width(Fill),
     );
-    list = push_system_section(list, application, state, open_count, palette);
+    list = push_system_section(list, application, state, visible_open.len(), palette);
 
     let scroller = a::scroll_area(container(list).padding(Padding {
         top: 0.0,
@@ -265,35 +273,41 @@ fn push_system_section<'a>(
     offset: usize,
     palette: a::Palette,
 ) -> iced::widget::Column<'a, Message> {
+    if !meets_system_query_minimum(&state.query) {
+        list = list.push(section_header("THIS MAC", String::new(), palette));
+        return list.push(empty_status(
+            "Type at least 2 characters to search This Mac",
+            palette,
+        ));
+    }
     let debouncing = state.debounce_deadline.is_some();
     let status = application.system_search_status();
-    let right_label = if debouncing || matches!(status, SystemSearchStatus::Searching) {
-        "Searching...".to_owned()
-    } else if let SystemSearchStatus::Ready { results, truncated } = status {
-        if *truncated {
-            format!("{}+", results.len())
-        } else {
-            results.len().to_string()
-        }
-    } else {
-        String::new()
-    };
-    list = list.push(section_header("THIS MAC", right_label, palette));
     if debouncing
         || matches!(
             status,
             SystemSearchStatus::Searching | SystemSearchStatus::Idle
         )
     {
+        list = list.push(section_header(
+            "THIS MAC",
+            "Searching...".to_owned(),
+            palette,
+        ));
         return list.push(empty_status("Searching This Mac...", palette));
     }
     match status {
-        SystemSearchStatus::Ready { .. } => {
-            let results = system_results(application);
-            if results.is_empty() {
+        SystemSearchStatus::Ready { results, truncated } => {
+            let visible = state.visible_system_results(application);
+            let total = results.len();
+            list = list.push(section_header(
+                "THIS MAC",
+                section_count_label(visible.len(), total, *truncated),
+                palette,
+            ));
+            if visible.is_empty() {
                 list.push(empty_status("No matches on This Mac", palette))
             } else {
-                for (index, item) in results.iter().enumerate() {
+                for (index, item) in visible.iter().enumerate() {
                     let flat_index = offset + index;
                     list = list.push(result_row(
                         item,
@@ -302,11 +316,79 @@ fn push_system_section<'a>(
                         palette,
                     ));
                 }
-                list
+                push_section_footer(
+                    list,
+                    visible.len(),
+                    total,
+                    *truncated,
+                    Action::ShowMoreThisMac,
+                    palette,
+                )
             }
         }
-        SystemSearchStatus::Unavailable(message) => list.push(empty_status(message, palette)),
+        SystemSearchStatus::Unavailable(message) => {
+            list = list.push(section_header("THIS MAC", String::new(), palette));
+            list.push(empty_status(message.as_str(), palette))
+        }
         SystemSearchStatus::Idle | SystemSearchStatus::Searching => list,
+    }
+}
+
+fn section_count_label(visible: usize, total: usize, truncated: bool) -> String {
+    if visible < total {
+        if truncated {
+            format!("{visible} of {total}+")
+        } else {
+            format!("{visible} of {total}")
+        }
+    } else if truncated {
+        format!("{total}+")
+    } else {
+        total.to_string()
+    }
+}
+
+fn push_section_footer<'a>(
+    list: iced::widget::Column<'a, Message>,
+    visible: usize,
+    total: usize,
+    truncated: bool,
+    action: Action,
+    palette: a::Palette,
+) -> iced::widget::Column<'a, Message> {
+    if visible < total {
+        let next = (total - visible).min(EXPAND_RESULTS_STEP);
+        list.push(show_more_row(format!("Show {next} more"), action, palette))
+    } else if truncated {
+        list.push(empty_status(
+            format!("Showing first {total} matches. Type more to narrow."),
+            palette,
+        ))
+    } else {
+        list
+    }
+}
+
+fn show_more_row<'a>(label: String, action: Action, palette: a::Palette) -> Element<'a, Message> {
+    let ty = palette.typography;
+    button(container(ty.small(label)).width(Fill).align_x(Center))
+        .padding([5, 8])
+        .width(Fill)
+        .on_press(Message::Search(action))
+        .style(move |_, status| show_more_style(palette, status))
+        .into()
+}
+
+fn show_more_style(palette: a::Palette, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: hovered.then(|| palette.row_hover.into()),
+        text_color: if hovered { palette.text } else { palette.muted },
+        border: Border {
+            radius: 5.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
     }
 }
 
@@ -329,7 +411,10 @@ fn section_header<'a>(
     .into()
 }
 
-fn empty_status<'a>(label: &'a str, palette: a::Palette) -> Element<'a, Message> {
+fn empty_status<'a>(
+    label: impl text::IntoFragment<'a>,
+    palette: a::Palette,
+) -> Element<'a, Message> {
     let ty = palette.typography;
     container(ty.small(label).color(palette.muted))
         .padding([4, 6])
