@@ -10,26 +10,17 @@ use crate::application::contracts::directory::{DirectoryError, DirectoryErrorKin
 use crate::application::{Application, Effect};
 use crate::domain::{NavigationIntent, ViewId};
 
-/// Named runtime self-healing scenarios for folder views.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeHealingScenario {
-    /// An already-open or restored folder was deleted on disk (`NotFound`);
-    /// steps up to the nearest allowed parent folder.
-    DeletedFolderStepUp,
-    /// An already-open or restored folder was deleted on disk and has no
-    /// allowed parent; falls back to the box's configured starting folder.
-    DeletedFolderReturnToStart,
-}
-
 impl Application {
     /// Evaluates whether a failed directory listing matches a runtime
-    /// self-healing scenario and returns the recovery effect if applicable.
+    /// self-healing scenario and returns the recovery effect if applicable:
+    /// step up to the nearest allowed parent folder, or fall back to the
+    /// box's configured starting folder.
     pub(in crate::application) fn try_heal_directory_error(
         &mut self,
         view: ViewId,
         intent: NavigationIntent,
         error: &DirectoryError,
-    ) -> Option<(RuntimeHealingScenario, Effect)> {
+    ) -> Option<Effect> {
         if error.kind != DirectoryErrorKind::NotFound {
             return None;
         }
@@ -62,16 +53,16 @@ impl Application {
             && policy.check_read_directory(&parent).is_ok()
             && let Some(effect) = self.request(view, parent, NavigationIntent::Open)
         {
-            return Some((RuntimeHealingScenario::DeletedFolderStepUp, effect));
+            return Some(effect);
         }
 
-        // Scenario 2: Fall back to the view's starting folder if distinct and allowed.
+        // Scenario 2: Fall back to the box's configured starting folder if distinct and allowed.
         if start_candidate != current
             && scope.allows(&start_candidate)
             && policy.check_read_directory(&start_candidate).is_ok()
             && let Some(effect) = self.request(view, start_candidate, NavigationIntent::Open)
         {
-            return Some((RuntimeHealingScenario::DeletedFolderReturnToStart, effect));
+            return Some(effect);
         }
 
         None

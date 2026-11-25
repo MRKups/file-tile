@@ -37,19 +37,3 @@ pub enum ConfigHealingScenario {
     /// other workspace exists, recreating an empty workspace for that UUID.
     EmptyWorkspaceRecreation,
 }
-
-impl ConfigHealingScenario {
-    /// Short identifier for diagnostics and notices.
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::OrphanedTemporaryFiles => "orphaned_temporary_files",
-            Self::MalformedCapabilitiesPreferences => "malformed_capabilities_preferences",
-            Self::MalformedSafetyPreferences => "malformed_safety_preferences",
-            Self::MalformedPinnedFolders => "malformed_pinned_folders",
-            Self::MalformedViewTopItem => "malformed_view_top_item",
-            Self::MalformedBoxSidebar => "malformed_box_sidebar",
-            Self::MissingActiveWorkspaceFallback => "missing_active_workspace_fallback",
-            Self::EmptyWorkspaceRecreation => "empty_workspace_recreation",
-        }
-    }
-}

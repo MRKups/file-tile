@@ -338,9 +338,6 @@ impl Application {
     pub fn home(&self) -> &std::path::Path {
         &self.home
     }
-    pub fn state_directory(&self) -> &std::path::Path {
-        &self.state_dir
-    }
     pub fn set_state_directory(&mut self, state_dir: PathBuf) {
         self.state_dir = state_dir;
     }
@@ -1030,9 +1027,7 @@ impl Application {
                     let effects = self.cancel_folder_configuration();
                     self.box_configuration_error = Some((view, error.describe("configure folder")));
                     effects
-                } else if let Some((_scenario, effect)) =
-                    self.try_heal_directory_error(view, intent, &error)
-                {
+                } else if let Some(effect) = self.try_heal_directory_error(view, intent, &error) {
                     vec![effect]
                 } else {
                     self.fail(view, error.kind, error.to_string());

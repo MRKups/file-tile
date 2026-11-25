@@ -150,7 +150,7 @@ impl DirectoryListing {
             Some(&entry.path)
         }
     }
-    pub fn visible_len(&self) -> usize {
+    fn visible_len(&self) -> usize {
         self.visible_indices.len()
     }
     pub fn display_len(&self, show_hidden: bool) -> usize {

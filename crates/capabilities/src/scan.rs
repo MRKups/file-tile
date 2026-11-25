@@ -15,13 +15,13 @@ const MAX_FILE_SIZE: u64 = 256 * 1024;
 const MAX_READ_BYTES: usize = 16 * 1024;
 
 #[cfg(target_os = "macos")]
-pub(crate) fn is_dataless(metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn is_dataless(metadata: &fs::Metadata) -> bool {
     use std::os::macos::fs::MetadataExt;
     (metadata.st_flags() & 0x4000_0000) != 0
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn is_dataless(_metadata: &std::fs::Metadata) -> bool {
+pub(crate) fn is_dataless(_metadata: &fs::Metadata) -> bool {
     false
 }
 

@@ -16,8 +16,6 @@ pub enum MatchTier {
 pub struct JumpPick {
     /// Index into the selectable-candidates slice supplied to selection.
     pub candidate_index: usize,
-    /// Winning priority tier (`Prefix` takes priority over `Substring`).
-    pub tier: MatchTier,
     /// True when a repeated single-letter query collapsed to its single character to cycle.
     pub effective_query_collapsed: bool,
 }
@@ -213,10 +211,9 @@ where
     }
     if force_cycle {
         let unit = collapsed_repeat_unit(query).unwrap_or(query);
-        let (candidate_index, tier) = pick_cycled_match(names, unit, current_candidate)?;
+        let (candidate_index, _) = pick_cycled_match(names, unit, current_candidate)?;
         return Some(JumpPick {
             candidate_index,
-            tier,
             effective_query_collapsed: true,
         });
     }
@@ -228,21 +225,18 @@ where
         {
             return Some(JumpPick {
                 candidate_index,
-                tier: MatchTier::Prefix,
                 effective_query_collapsed: false,
             });
         }
-        let (candidate_index, tier) = pick_cycled_match(names, unit, current_candidate)?;
+        let (candidate_index, _) = pick_cycled_match(names, unit, current_candidate)?;
         return Some(JumpPick {
             candidate_index,
-            tier,
             effective_query_collapsed: true,
         });
     }
-    let (candidate_index, tier) = pick_best_match(names, query)?;
+    let (candidate_index, _) = pick_best_match(names, query)?;
     Some(JumpPick {
         candidate_index,
-        tier,
         effective_query_collapsed: false,
     })
 }

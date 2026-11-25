@@ -20,7 +20,7 @@ pub struct JumpCandidate<'a> {
 /// are always selectable inside an allowed current folder, `ScopeKind::Free` allows all
 /// child directories (including unresolved directory symlinks), and restrictive scopes
 /// require a resolved target allowed by `scope`.
-pub fn entry_selectable(listing: &DirectoryListing, scope: &Scope, entry: &DirectoryEntry) -> bool {
+fn entry_selectable(listing: &DirectoryListing, scope: &Scope, entry: &DirectoryEntry) -> bool {
     entry.kind != EntryKind::Directory
         || scope.kind() == ScopeKind::Free
         || listing

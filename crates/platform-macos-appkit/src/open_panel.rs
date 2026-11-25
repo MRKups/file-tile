@@ -4,7 +4,6 @@
 //! synchronous modal loops, or off-main Objective-C object drops.
 
 use std::cell::RefCell;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

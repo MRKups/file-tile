@@ -1,7 +1,7 @@
 //! Symlinked folder target, read-only permission, cloud storage, and drive mount detection.
 
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use crate::CapabilityItem;
 
@@ -16,11 +16,6 @@ pub enum MountOrigin {
         fstype: String,
         name: Option<String>,
     },
-}
-
-pub fn detect(directory: &Path, resolved: &Path) -> Vec<CapabilityItem> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    detect_with_context(directory, resolved, home.as_deref(), &MountOrigin::Local)
 }
 
 pub fn detect_with_context(

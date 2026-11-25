@@ -164,7 +164,7 @@ fn inspect_candidate(
     } else {
         return None;
     };
-    let dataless = is_dataless(&meta);
+    let dataless = super::is_dataless(&meta);
     Some(SearchResult {
         name: file_name.to_string_lossy().into_owned(),
         parent_display: format_parent_display(&path, home),
@@ -173,19 +173,6 @@ fn inspect_candidate(
         dataless,
         tier,
     })
-}
-
-fn is_dataless(metadata: &fs::Metadata) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::macos::fs::MetadataExt;
-        (metadata.st_flags() & 0x4000_0000) != 0
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = metadata;
-        false
-    }
 }
 
 fn record_search_issue(generation: u64, outcome: Outcome, elapsed: std::time::Duration) {

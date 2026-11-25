@@ -24,3 +24,16 @@ pub use worker::DirectoryWorkers;
 pub mod file_operations;
 pub mod folder_usage;
 pub mod sorting;
+
+pub(crate) fn is_dataless(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        (metadata.st_flags() & 0x4000_0000) != 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = metadata;
+        false
+    }
+}

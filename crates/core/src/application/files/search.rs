@@ -28,7 +28,6 @@ pub struct SearchResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OpenTilesMatches {
     pub results: Vec<SearchResult>,
-    pub total_matches: usize,
     pub truncated: bool,
 }
 
@@ -132,14 +131,9 @@ impl Application {
             return OpenTilesMatches::default();
         }
         let mut results = self.collect_open_tile_matches(query);
-        let total_matches = results.len();
-        let truncated = total_matches > MAX_OPEN_TILE_RESULTS;
+        let truncated = results.len() > MAX_OPEN_TILE_RESULTS;
         results.truncate(MAX_OPEN_TILE_RESULTS);
-        OpenTilesMatches {
-            results,
-            total_matches,
-            truncated,
-        }
+        OpenTilesMatches { results, truncated }
     }
 
     fn collect_open_tile_matches(&self, query: &str) -> Vec<SearchResult> {

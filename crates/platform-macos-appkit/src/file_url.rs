@@ -55,7 +55,7 @@ pub fn encode_nsurl(path: &Path) -> Result<Retained<NSURL>, FileUrlError> {
 }
 
 /// Decodes a percent-encoded POSIX URL path into a validated UTF-8 `PathBuf`.
-pub fn decode_percent_path(
+fn decode_percent_path(
     encoded_path: &str,
     strip_trailing_slash: bool,
 ) -> Result<PathBuf, FileUrlError> {

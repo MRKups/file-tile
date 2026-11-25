@@ -27,7 +27,7 @@ impl DirectoryReader for NativeDirectory {
         if cancellation.is_cancelled() {
             return Err(MetadataError::Cancelled);
         }
-        let dataless = is_dataless(&metadata);
+        let dataless = super::is_dataless(&metadata);
         let inspect_contents =
             !dataless && crate::platform::volumes::is_local_measurable_mount(path);
         Ok(FileMetadata {
@@ -221,7 +221,7 @@ fn read_resolved_directory(
     let local_mount = crate::platform::volumes::is_local_measurable_mount(&resolved);
     let dir_dataless = fs::metadata(&resolved)
         .ok()
-        .is_some_and(|m| is_dataless(&m));
+        .is_some_and(|m| super::is_dataless(&m));
     let capabilities = crate::capabilities::detect_in_context_measurable(
         directory,
         &resolved,
@@ -245,7 +245,7 @@ fn classify(entry: &fs::DirEntry, issues: &mut Vec<DirectoryIssue>) -> (EntryKin
             Ok(metadata) => (
                 entry_kind(metadata.file_type()),
                 true,
-                is_dataless(&metadata),
+                super::is_dataless(&metadata),
             ),
             Err(error) => {
                 issues.push(DirectoryIssue {
@@ -256,7 +256,10 @@ fn classify(entry: &fs::DirEntry, issues: &mut Vec<DirectoryIssue>) -> (EntryKin
             }
         },
         Ok(kind) => {
-            let dataless = entry.metadata().ok().is_some_and(|m| is_dataless(&m));
+            let dataless = entry
+                .metadata()
+                .ok()
+                .is_some_and(|m| super::is_dataless(&m));
             (entry_kind(kind), false, dataless)
         }
         Err(error) => {
@@ -266,19 +269,6 @@ fn classify(entry: &fs::DirEntry, issues: &mut Vec<DirectoryIssue>) -> (EntryKin
             });
             (EntryKind::Other, false, false)
         }
-    }
-}
-
-fn is_dataless(metadata: &fs::Metadata) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::macos::fs::MetadataExt;
-        (metadata.st_flags() & 0x4000_0000) != 0
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = metadata;
-        false
     }
 }
 

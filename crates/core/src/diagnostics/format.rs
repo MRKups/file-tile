@@ -106,12 +106,10 @@ pub(super) fn severity(
         | Outcome::Busy
         | Outcome::Unavailable
         | Outcome::TimedOut
-        | Outcome::InvalidOutput
         | Outcome::RecoveryOnly
         | Outcome::ExternalChange
         | Outcome::ReadOnly
         | Outcome::BackupAvailable
-        | Outcome::OutputLimit
         | Outcome::NotFound
         | Outcome::NotDirectory
         | Outcome::PermissionDenied => Some("WARN"),

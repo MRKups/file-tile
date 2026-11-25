@@ -73,7 +73,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           python3 -m unittest discover -s scripts/tests -p "test_*.py" -v
-          cargo test --locked
+          cargo test --locked --workspace
 
       - name: Install cargo-packager
         run: |

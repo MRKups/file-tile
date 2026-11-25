@@ -62,7 +62,7 @@ impl Drop for MdfindChild {
 }
 
 /// Builds a strictly escaped Spotlight filename predicate that never begins with `-`.
-pub fn build_filename_predicate(query: &str) -> Result<String, SearchFailure> {
+fn build_filename_predicate(query: &str) -> Result<String, SearchFailure> {
     let trimmed = query.trim();
     if trimmed.is_empty() || trimmed.len() > MAX_QUERY_BYTES || trimmed.contains(['\0', '\r', '\n'])
     {

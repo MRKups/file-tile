@@ -68,7 +68,6 @@ pub(super) fn text(event: &Event) -> Option<String> {
         Outcome::Busy => "too many requests are pending".into(),
         Outcome::Unavailable => "the required background service is unavailable".into(),
         Outcome::TimedOut => "the operation exceeded its time limit".into(),
-        Outcome::InvalidOutput => "the system utility returned an unreadable result".into(),
         Outcome::UnsafePath => "a managed configuration path is a symbolic link or has the wrong file type".into(),
         // Constructed solely from ErrorKind, never from a raw OS error or path.
         Outcome::Io(kind) => match kind {
@@ -86,7 +85,6 @@ pub(super) fn text(event: &Event) -> Option<String> {
         Outcome::NotFound => "the folder no longer exists".into(),
         Outcome::NotDirectory => "the location is not a folder".into(),
         Outcome::PermissionDenied => "access was denied".into(),
-        Outcome::OutputLimit => "the system utility exceeded its output limit".into(),
         Outcome::Failed => "the operation failed; its cause was not recorded".into(),
         _ => return None,
     };

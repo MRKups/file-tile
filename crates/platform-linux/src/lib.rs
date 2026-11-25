@@ -3,7 +3,6 @@
 //! Exposes the same module and function surface as `file-tile-platform-macos`
 //! so `file-tile-core` and `file-tile-ui-iced` compile without OS-specific branching.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -423,13 +422,6 @@ pub mod search {
     pub struct RawSearchOutput {
         pub paths: Vec<PathBuf>,
         pub truncated: bool,
-    }
-
-    pub fn build_filename_predicate(query: &str) -> Result<String, SearchFailure> {
-        let _ = query;
-        Err(SearchFailure::Unavailable(
-            "System-wide filename search is not yet implemented on Linux.".into(),
-        ))
     }
 
     pub fn search_filenames(

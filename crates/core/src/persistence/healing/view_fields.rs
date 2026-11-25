@@ -4,7 +4,7 @@
 //!
 //! Heals malformed `top_item` and `sidebar` values on workspace view and box
 //! records without locking workspace autosave into read-only mode, while
-//! treating omitted keys in pre-WO14 and pre-WO15 `schema_version: 1` files as
+//! treating omitted keys in older `schema_version: 1` files as
 //! defaults without healing notices.
 
 use serde_json::Value;

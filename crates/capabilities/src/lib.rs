@@ -4,27 +4,27 @@
 //! snapshots and small marker files without spawning subprocesses, and emits
 //! compact tokens for the folder box footer along with hover tooltip details.
 
-pub mod cpp;
-pub mod dart;
-pub mod dotnet;
-pub mod elixir;
-pub mod env;
-pub mod folder;
-pub mod git;
-pub mod go;
-pub mod jvm;
-pub mod node;
-pub mod php;
-pub mod python;
-pub mod ruby;
-pub mod rust;
-pub mod scan;
-pub mod swift;
-pub mod terraform;
-pub mod toolchains;
-pub mod zig;
+mod cpp;
+mod dart;
+mod dotnet;
+mod elixir;
+mod env;
+mod folder;
+mod git;
+mod go;
+mod jvm;
+mod node;
+mod php;
+mod python;
+mod ruby;
+mod rust;
+mod scan;
+mod swift;
+mod terraform;
+mod toolchains;
+mod zig;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use folder::MountOrigin;
 
@@ -147,14 +147,6 @@ impl FolderCapabilities {
         Self { items }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    pub fn items(&self) -> &[CapabilityItem] {
-        &self.items
-    }
-
     pub fn active_items(
         &self,
         preferences: CapabilityPreferences,
@@ -163,11 +155,6 @@ impl FolderCapabilities {
             .iter()
             .filter(move |item| item.kind.is_none_or(|kind| preferences.enabled(kind)))
     }
-}
-
-/// Inspect `directory` and its bounded ancestors across all capability modules.
-pub fn detect(directory: &Path) -> FolderCapabilities {
-    detect_resolved(directory, directory)
 }
 
 type Detector = fn(&[scan::DirSnapshot]) -> Option<CapabilityItem>;
@@ -190,25 +177,6 @@ const DETECTORS: [Detector; 16] = [
     terraform::detect,
     toolchains::detect,
 ];
-
-/// Inspect `directory` (the requested path) and `resolved` (its canonical target)
-/// along with bounded ancestors across all capability modules.
-pub fn detect_resolved(directory: &Path, resolved: &Path) -> FolderCapabilities {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    detect_in_context(directory, resolved, home.as_deref(), MountOrigin::Local)
-}
-
-/// Inspect `directory` and `resolved` with explicit home and mount context
-/// along with bounded ancestors across all capability modules.
-pub fn detect_in_context(
-    directory: &Path,
-    resolved: &Path,
-    home: Option<&Path>,
-    mount: MountOrigin,
-) -> FolderCapabilities {
-    let scan_contents = !matches!(mount, MountOrigin::Network { .. });
-    detect_in_context_measurable(directory, resolved, home, mount, scan_contents)
-}
 
 /// Inspect `directory` and `resolved` with explicit home, mount, and content-scan gate.
 pub fn detect_in_context_measurable(

@@ -75,7 +75,6 @@ pub enum ItemStatus {
 
 #[derive(Debug, Clone)]
 pub struct ItemOutcome {
-    pub destination: PathBuf,
     pub status: ItemStatus,
 }
 
@@ -103,9 +102,8 @@ impl Operation {
     }
     fn next(&mut self) -> Option<Job> {
         if self.stopped || self.error.is_some() {
-            for (_, name) in self.pending.drain(..) {
+            for _ in self.pending.drain(..) {
                 self.outcomes.push(ItemOutcome {
-                    destination: self.directory.join(name),
                     status: ItemStatus::Cancelled,
                 });
             }
@@ -135,11 +133,8 @@ impl Operation {
         Some(job)
     }
 
-    fn record(&mut self, job: &Job, status: ItemStatus) {
-        self.outcomes.push(ItemOutcome {
-            destination: self.directory.join(&job.name),
-            status,
-        });
+    fn record(&mut self, status: ItemStatus) {
+        self.outcomes.push(ItemOutcome { status });
     }
 }
 
@@ -458,12 +453,12 @@ impl Application {
             }
             Outcome::Conflict => {
                 operation.stopped = true;
-                operation.record(&receipt.job, ItemStatus::Cancelled);
+                operation.record(ItemStatus::Cancelled);
             }
             Outcome::Complete => {
                 completed_ok = true;
                 operation.completed += 1;
-                operation.record(&receipt.job, ItemStatus::Complete);
+                operation.record(ItemStatus::Complete);
                 if let Item::Trash(source) | Item::Move(source) | Item::Rename(source) =
                     &receipt.job.item
                 {
@@ -471,7 +466,7 @@ impl Application {
                 }
             }
             Outcome::Failed(error) => {
-                operation.record(&receipt.job, ItemStatus::Failed);
+                operation.record(ItemStatus::Failed);
                 let detail = match &receipt.job.item {
                     Item::Move(path) => format!(
                         "\nSource: {}\nDestination: {}",
@@ -571,8 +566,7 @@ impl Application {
                 vec![Effect::RunFileOperation(job)]
             }
             ConflictChoice::Skip => {
-                let job = job.clone();
-                operation.record(&job, ItemStatus::Skipped);
+                operation.record(ItemStatus::Skipped);
                 operation.skipped += 1;
                 operation
                     .next()
@@ -581,8 +575,7 @@ impl Application {
                     .collect()
             }
             ConflictChoice::Cancel => {
-                let job = job.clone();
-                operation.record(&job, ItemStatus::Cancelled);
+                operation.record(ItemStatus::Cancelled);
                 operation.stopped = true;
                 operation.next();
                 vec![]
@@ -603,9 +596,8 @@ impl Application {
                 None,
             );
             operation.stopped = true;
-            if let Phase::Conflict(job) = &operation.phase {
-                let job = job.clone();
-                operation.record(&job, ItemStatus::Cancelled);
+            if matches!(operation.phase, Phase::Conflict(_)) {
+                operation.record(ItemStatus::Cancelled);
                 operation.next();
             }
         }

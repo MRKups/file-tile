@@ -192,7 +192,7 @@ impl SafetyPreferences {
         self
     }
 
-    pub fn excluded_home_usage_folders(&self) -> Vec<&'static str> {
+    fn excluded_home_usage_folders(&self) -> Vec<&'static str> {
         let mut excluded = Vec::with_capacity(4 + SHARED_USAGE_EXCLUSIONS.len() + 3);
         excluded.extend_from_slice(&["Library", "Pictures", "Music", "Movies"]);
         excluded.extend_from_slice(&SHARED_USAGE_EXCLUSIONS);

@@ -5,7 +5,7 @@
 //! input/scroll primitives), `canvas` (workspace grid, header, toolbar, and layout gestures),
 //! `boxes` (folder boxes, tab rails, shortcuts, list/grid/column views, and entry motion), `menus`
 //! (context menus, sort popup, file prompts, and drag-and-drop), and `dialogs` (Settings,
-//! Configure, Workspaces, Recovery, Updates, and About).
+//! Configure, Workspaces, Search, Recovery, Updates, and About).
 
 pub(crate) use file_tile_core::{
     GIT_COMMIT, VERSION, application, diagnostics, domain, filesystem, persistence, platform,

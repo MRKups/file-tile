@@ -215,11 +215,6 @@ impl DirectoryWatcher {
         })
     }
 
-    /// Replace pending configuration without waiting for OS registration or queue space.
-    pub fn replace(&self, observations: Vec<DirectoryObservation>) -> io::Result<()> {
-        self.replace_with_locations(observations, Vec::new())
-    }
-
     /// Replace pending folder observations and non-recursive location roots atomically.
     pub fn replace_with_locations(
         &self,

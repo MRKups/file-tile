@@ -65,7 +65,7 @@
 
 ```sh
 task check     # Run documentation checks, source guards, Clippy, and tests
-task run       # Run file-tile in debug mode
+task run       # Run file-tile in release mode (PROFILE=dev for debug)
 task build     # Build the release binary at target/release/file-tile
 task package   # Build target/release/file-tile.app and the .dmg installer
 ```

@@ -35,23 +35,6 @@ impl CloudProvider {
             Self::Other => "Cloud Storage",
         }
     }
-
-    pub const fn slug(self) -> &'static str {
-        match self {
-            Self::ICloudDrive => "icloud",
-            Self::ProtonDrive => "proton",
-            Self::OneDrive => "onedrive",
-            Self::Dropbox => "dropbox",
-            Self::Box => "box",
-            Self::GoogleDrive => "gdrive",
-            Self::Nextcloud => "nextcloud",
-            Self::PCloud => "pcloud",
-            Self::OwnCloud => "owncloud",
-            Self::SynologyDrive => "synology",
-            Self::Mega => "mega",
-            Self::Other => "cloud",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
