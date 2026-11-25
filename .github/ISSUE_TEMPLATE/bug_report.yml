@@ -6,7 +6,8 @@ body:
     id: version
     attributes:
       label: file-tile Version
-      placeholder: "0.1.0 (or commit hash)"
+      description: From file-tile -> About file-tile.
+      placeholder: "0.1.0 (5575566)"
     validations:
       required: true
   - type: input

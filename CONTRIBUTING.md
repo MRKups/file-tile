@@ -27,6 +27,7 @@ Or without [Task](https://taskfile.dev):
 ```sh
 python3 scripts/dev.py docs
 python3 scripts/dev.py guard
+python3 scripts/audit.py
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 python3 -m unittest discover -s scripts/tests -p "test_*.py" -v

@@ -3,12 +3,13 @@
 //! Exposes the same module and function surface as `file-tile-platform-macos`
 //! so `file-tile-core` and `file-tile-ui-iced` compile without OS-specific branching.
 
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
+
+pub mod volumes;
 
 pub type DisplayBounds = ((f32, f32, f32, f32), (f32, f32, f32, f32));
 pub type PathChoice = Pin<Box<dyn Future<Output = Result<Option<PathBuf>, String>> + Send>>;
@@ -273,11 +274,30 @@ pub mod moving {
         ))
     }
 
+    pub struct SourceTreeSnapshot;
+
+    pub fn snapshot_source_tree(
+        _source: &Path,
+        _source_parent: (u64, u64),
+        _original: (u64, u64),
+    ) -> Result<SourceTreeSnapshot, String> {
+        Err("Verified source tree snapshot is not yet implemented on Windows.".into())
+    }
+
+    pub fn remove_verified_tree(
+        _source: &Path,
+        _source_parent: (u64, u64),
+        _snapshot: &SourceTreeSnapshot,
+    ) -> Result<(), String> {
+        Err("Verified source tree cleanup is not yet implemented on Windows.".into())
+    }
+
     pub fn remove_verified_source(
         _source: &Path,
         _source_parent: (u64, u64),
         _original: (u64, u64),
-        _is_dir: bool,
+        _expected_size: u64,
+        _expected_mtime: (i64, i64),
     ) -> Result<(), String> {
         Err("Verified source cleanup is not yet implemented on Windows.".into())
     }
@@ -297,8 +317,16 @@ pub mod permissions {
         PermissionStatus::Unavailable
     }
 
+    pub fn check_path_access(_path: &Path) -> PermissionStatus {
+        PermissionStatus::Granted
+    }
+
     pub fn check_folder_access(_folder_name: Option<&str>, _home: &Path) -> PermissionStatus {
         PermissionStatus::Granted
+    }
+
+    pub fn request_path_access(_path: &Path) -> PermissionStatus {
+        PermissionStatus::Unavailable
     }
 
     pub fn request_folder_access(_folder_name: Option<&str>, _home: &Path) -> PermissionStatus {
@@ -376,5 +404,32 @@ pub mod updater {
         pub fn set_automatic_checks(&self, _enabled: bool) -> Result<bool, &'static str> {
             Err("Automatic updates are not yet supported on Windows.")
         }
+    }
+}
+
+pub mod search {
+    use std::path::PathBuf;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SearchFailure {
+        Cancelled,
+        TimedOut,
+        InvalidQuery,
+        Unavailable(String),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RawSearchOutput {
+        pub paths: Vec<PathBuf>,
+        pub truncated: bool,
+    }
+
+    pub fn search_filenames(
+        _query: &str,
+        _is_cancelled: impl Fn() -> bool,
+    ) -> Result<RawSearchOutput, SearchFailure> {
+        Err(SearchFailure::Unavailable(
+            "System-wide filename search is not yet implemented on Windows.".into(),
+        ))
     }
 }

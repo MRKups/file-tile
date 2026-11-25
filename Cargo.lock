@@ -496,15 +496,20 @@ dependencies = [
 
 [[package]]
 name = "file-tile"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "file-tile-ui-iced",
 ]
 
 [[package]]
+name = "file-tile-capabilities"
+version = "0.2.0"
+
+[[package]]
 name = "file-tile-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "file-tile-capabilities",
  "file-tile-platform-linux",
  "file-tile-platform-macos",
  "file-tile-platform-windows",
@@ -518,11 +523,11 @@ dependencies = [
 
 [[package]]
 name = "file-tile-platform-linux"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "file-tile-platform-macos"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "file-tile-platform-macos-appkit",
  "objc2 0.6.5",
@@ -535,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "file-tile-platform-macos-appkit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
@@ -545,11 +550,11 @@ dependencies = [
 
 [[package]]
 name = "file-tile-platform-windows"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "file-tile-ui-iced"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "file-tile-core",
  "iced",

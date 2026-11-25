@@ -5,10 +5,10 @@
 //! input/scroll primitives), `canvas` (workspace grid, header, toolbar, and layout gestures),
 //! `boxes` (folder boxes, tab rails, shortcuts, list/grid/column views, and entry motion), `menus`
 //! (context menus, sort popup, file prompts, and drag-and-drop), and `dialogs` (Settings,
-//! Configure, Workspaces, Recovery, Updates, and About).
+//! Configure, Workspaces, Search, Recovery, Updates, and About).
 
 pub(crate) use file_tile_core::{
-    application, diagnostics, domain, filesystem, persistence, platform,
+    GIT_COMMIT, VERSION, application, diagnostics, domain, filesystem, persistence, platform,
 };
 
 mod boxes;
@@ -46,7 +46,10 @@ use dialogs::{
     about, app_settings, box_settings, diagnostics as diagnostics_dialog, folder_picker,
     range_editor, storage_dialog, updates, workspace_management,
 };
-use menus::{context_menu, entry_menu, file_actions, file_drag, folder_menu, sort_menu, tab_menu};
+use menus::{
+    context_menu, entry_menu, file_actions, file_drag, folder_menu, sidebar_menu, sort_menu,
+    tab_menu,
+};
 use runtime::{
     folder_usage, input::WindowDrag, launch, metadata, native_menu, opening, sorting, startup,
     thumbnails,
@@ -97,6 +100,15 @@ enum Message {
     OpenTabMenu(crate::domain::BoxId, ViewId, Option<Point>),
     DismissTabMenu(u64),
     CloseMenuTab(u64),
+    OpenSidebarMenu(
+        crate::domain::BoxId,
+        PathBuf,
+        sidebar_menu::MenuKind,
+        Option<Point>,
+    ),
+    DismissSidebarMenu(u64),
+    UnpinSidebarMenu(u64),
+    EjectSidebarMenu(u64),
     OpenEntryMenu(ViewId, PathBuf, Option<Point>),
     OpenFolderMenu(ViewId, Point),
     OpenPreviewFolderMenu(ViewId, Point),
@@ -113,7 +125,7 @@ enum Message {
     ColumnPreviewSelected(ViewId, PathBuf),
     ColumnPreviewOpened(ViewId, PathBuf),
     ColumnPreviewHovered(ViewId, PathBuf, bool),
-    ColumnPreviewScrolled(ViewId, f32),
+    ColumnPreviewScrolled(ViewId, u64, f32),
     TreeChosen(ViewId, PathBuf),
     TreeScrolled(ViewId, f32),
     RangeStartChanged(ViewId, String),
@@ -125,6 +137,10 @@ enum Message {
     BeginTabDrag(crate::domain::BoxId, ViewId, Point),
     MoveTabDrag(Point),
     FinishTabDrag,
+    SidebarScrolled(crate::domain::BoxId, f32),
+    SidebarPinPressed(crate::domain::BoxId, usize, PathBuf),
+    SidebarLocationActivated(crate::domain::BoxId, PathBuf),
+    EjectSidebarVolume(crate::domain::BoxId, PathBuf),
     Action(Action),
     Input(Event, Status),
     WindowEvent(iced_window::Id, iced_window::Event),
@@ -136,13 +152,14 @@ enum Message {
     ViewportLaidOut(Size),
     WindowAppearanceObserved(window_appearance::Capability),
     SystemThemeChanged(iced::theme::Mode),
-    FileViewportScrolled(ViewId, iced::widget::scrollable::AbsoluteOffset, f32),
+    FileViewportScrolled(ViewId, iced::widget::scrollable::AbsoluteOffset, f32, bool),
     ListingScrollObserved {
         view: ViewId,
         generation: u64,
         window: file_list::ScrollWindow,
     },
     MotionFrame(std::time::Instant),
+    TypeJumpBeginFade(std::time::Instant),
     CanvasScrolled(Vector),
     DragWindow,
     LayoutPressed {
@@ -165,6 +182,9 @@ enum Message {
     ConfirmStartup,
     CancelStartupConfirmation,
     About(about::Action),
+    Search(dialogs::search::Action),
+    SearchCompleted(crate::application::files::search::SearchCompletion),
+    SearchResultOpened(crate::application::files::search::SearchOpenCompletion),
     OpenAppSettings,
     AppSettingsChanged(String),
     AppAppearanceEdited(app_settings::AppearanceEdit),
@@ -174,6 +194,7 @@ enum Message {
     AppFontExplorer(app_settings::FontExplorerEdit),
     AppTypographyChanged(crate::application::preferences::typography::TypographyPreferences),
     AppAccessSafetyEdited(app_settings::AccessSafetyEdit),
+    AppCapabilitiesChanged(crate::domain::CapabilityPreferences),
     ApplyAppSettings,
     CancelAppSettings,
     BoxFolderChanged(ViewId, String),
@@ -197,6 +218,7 @@ struct ViewPresentation {
     selection: std::collections::HashSet<PathBuf>,
     pending_selection: std::collections::HashSet<PathBuf>,
     reveal_selected: bool,
+    reveal_after_motion: bool,
     selection_anchor: Option<PathBuf>,
     draft: Option<String>,
     draft_revision: u64,
@@ -207,6 +229,7 @@ struct ViewPresentation {
     hint: Option<String>,
     scroll: file_list::ScrollWindow,
     scroll_x: f32,
+    pending_scroll_restore: Option<std::num::NonZeroU32>,
     listing_revision: u64,
     earlier_ancestors: bool,
     column_focus: Option<boxes::file_columns::ColumnFocus>,
@@ -271,12 +294,19 @@ struct Desktop {
     native_menu: native_menu::Runtime,
     tab_menu: Option<tab_menu::Menu>,
     next_tab_menu_generation: u64,
+    sidebar_menu: Option<sidebar_menu::Menu>,
+    next_sidebar_menu_generation: u64,
     entry_menu: Option<entry_menu::Menu>,
     next_entry_menu_generation: u64,
     folder_menu: Option<folder_menu::Menu>,
     next_folder_menu_generation: u64,
     open_workers: Option<Arc<crate::filesystem::OpenWorkers>>,
     pending_open: Option<opening::Pending>,
+    location_workers: Option<Arc<crate::filesystem::LocationWorkers>>,
+    pending_locations: Option<startup::PendingLocations>,
+    search_workers: Option<Arc<crate::filesystem::SearchWorkers>>,
+    pending_search: Option<startup::PendingSearch>,
+    pending_search_open: Option<startup::PendingSearchOpen>,
     metadata_workers: Option<Arc<crate::filesystem::MetadataWorkers>>,
     metadata_reads: HashMap<ViewId, metadata::Pending>,
     configuration_reads: HashMap<u64, PendingRead>,
@@ -300,12 +330,16 @@ struct Desktop {
     window_appearance: window_appearance::Capability,
     system_appearance: crate::application::preferences::appearance::SystemAppearance,
     about: Option<about::State>,
+    search: Option<dialogs::search::State>,
     app_settings: Option<app_settings::Draft>,
     workspace_management: Option<workspace_management::Draft>,
     box_settings: Option<box_settings::Draft>,
     tab_offsets: HashMap<crate::domain::BoxId, f32>,
     tab_drag: Option<tab_drag::Drag>,
+    sidebar_offsets: HashMap<crate::domain::BoxId, f32>,
+    sidebar_drag: Option<boxes::sidebar::drag::Drag>,
     file_drag: file_drag::State,
+    type_jump: runtime::type_jump::State,
     edit_anchor: Option<editing::Anchor>,
     folder_watcher: Option<Arc<crate::filesystem::DirectoryWatcher>>,
     watch_listener: Option<iced::task::Handle>,
@@ -323,7 +357,7 @@ impl Default for Desktop {
 
 impl Desktop {
     fn new(application: Application, directory: DirectoryBackend) -> Self {
-        Self {
+        let mut desktop = Self {
             launchers: launchers::Runtime::default(),
             logs: diagnostics_dialog::Logs::default(),
             updates: updates::Updates::default(),
@@ -341,12 +375,19 @@ impl Desktop {
             native_menu: native_menu::Runtime::default(),
             tab_menu: None,
             next_tab_menu_generation: 0,
+            sidebar_menu: None,
+            next_sidebar_menu_generation: 0,
             entry_menu: None,
             next_entry_menu_generation: 0,
             folder_menu: None,
             next_folder_menu_generation: 0,
             open_workers: None,
             pending_open: None,
+            location_workers: None,
+            pending_locations: None,
+            search_workers: None,
+            pending_search: None,
+            pending_search_open: None,
             metadata_workers: None,
             metadata_reads: HashMap::new(),
             configuration_reads: HashMap::new(),
@@ -371,16 +412,22 @@ impl Desktop {
             system_appearance:
                 crate::application::preferences::appearance::SystemAppearance::default(),
             about: None,
+            search: None,
             app_settings: None,
             workspace_management: None,
             box_settings: None,
             tab_offsets: HashMap::new(),
             tab_drag: None,
+            sidebar_offsets: HashMap::new(),
+            sidebar_drag: None,
             file_drag: file_drag::State::default(),
+            type_jump: runtime::type_jump::State::default(),
             edit_anchor: None,
             folder_watcher: None,
             watch_listener: None,
-        }
+        };
+        desktop.seed_missing_view_presentations();
+        desktop
     }
 }
 
@@ -408,7 +455,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>> {
     let system_font = system_font::SystemFont::load();
-    let workers = Arc::new(DirectoryWorkers::new(Arc::new(NativeDirectory), 2, 8)
+    let workers = Arc::new(DirectoryWorkers::new(Arc::new(NativeDirectory), 2, 64)
         .map_err(|error| std::io::Error::other(format!("Cannot start directory workers: {error}. Relaunch and collect error output if it persists.")))?);
     let metadata_workers = Arc::new(crate::filesystem::MetadataWorkers::new(Arc::new(
         NativeDirectory,
@@ -420,6 +467,8 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
     let file_worker = Arc::new(crate::filesystem::file_operations::FileOperationWorker::new()?);
     let thumbnail_workers = Arc::new(crate::filesystem::PreviewWorkers::new()?);
     let usage_workers = Arc::new(crate::filesystem::folder_usage::UsageWorkers::new()?);
+    let location_workers = Arc::new(crate::filesystem::LocationWorkers::new()?);
+    let search_workers = Arc::new(crate::filesystem::SearchWorkers::new()?);
     let boot = move || {
         let (mut desktop, task) =
             startup::boot(&launch, DirectoryBackend::Native(Arc::clone(&workers)));
@@ -427,19 +476,25 @@ fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>>
         desktop.sort_runtime.workers = Some(Arc::clone(&sort_workers));
         desktop.usage_runtime.workers = Some(Arc::clone(&usage_workers));
         desktop.open_workers = Some(Arc::clone(&open_workers));
+        desktop.location_workers = Some(Arc::clone(&location_workers));
+        desktop.search_workers = Some(Arc::clone(&search_workers));
         desktop.file_worker = Some(Arc::clone(&file_worker));
         desktop.thumbnails.workers = Some(Arc::clone(&thumbnail_workers));
         desktop.system_font = system_font.clone();
+        let locations_task = desktop.dispatch(Action::RefreshLocations);
         (
             desktop,
-            Task::batch([task, iced::system::theme().map(Message::SystemThemeChanged)]),
+            Task::batch([
+                task,
+                locations_task,
+                iced::system::theme().map(Message::SystemThemeChanged),
+            ]),
         )
     };
     iced::application(boot, Desktop::update, Desktop::view)
         .subscription(Desktop::subscription)
         .title("file-tile")
         .window(window_shell::settings())
-        .theme(appearance::theme())
         .style(|desktop: &Desktop, _| {
             let palettes = appearance::resolve(desktop.preview_appearance());
             iced::theme::Style {
@@ -470,12 +525,28 @@ impl Desktop {
     }
 
     fn has_active_entry_motion(&self) -> bool {
-        self.file_drag.is_animating() || self.views.values().any(|state| state.motion.is_some())
+        self.file_drag.is_animating()
+            || self.type_jump.is_fading()
+            || self.views.values().any(|state| state.motion.is_some())
+            || self
+                .entry_menu
+                .as_ref()
+                .is_some_and(entry_menu::Menu::is_hover_waiting)
     }
 
-    fn tick_entry_motion(&mut self, now: std::time::Instant) {
+    fn tick_entry_motion(&mut self, now: std::time::Instant) -> Task<Message> {
         self.file_drag.tick(now);
-        for state in self.views.values_mut() {
+        self.type_jump.tick(now);
+        if let Some(menu) = &mut self.entry_menu {
+            menu.tick(now);
+        }
+        let mut reveal_views = Vec::new();
+        let mut settled_scroll_views = Vec::new();
+        for (&view, state) in &mut self.views {
+            let had_layout_motion = state
+                .motion
+                .as_ref()
+                .is_some_and(boxes::entry_motion::ViewMotion::has_layout_motion);
             if state
                 .motion
                 .as_mut()
@@ -483,7 +554,34 @@ impl Desktop {
             {
                 state.motion = None;
             }
+            let has_layout_motion = state
+                .motion
+                .as_ref()
+                .is_some_and(boxes::entry_motion::ViewMotion::has_layout_motion);
+            if had_layout_motion && !has_layout_motion && state.pending_scroll_restore.is_none() {
+                settled_scroll_views.push((view, state.listing_revision));
+            }
+            if state.reveal_after_motion && !has_layout_motion {
+                state.reveal_after_motion = false;
+                reveal_views.push(view);
+            }
         }
+        let mut tasks = Vec::new();
+        for (view, revision) in settled_scroll_views {
+            if self.application.workspace().is_active(view)
+                && self
+                    .application
+                    .load(view)
+                    .and_then(LoadState::listing)
+                    .is_some()
+            {
+                tasks.push(file_list::observe_scroll(view, revision));
+            }
+        }
+        for view in reveal_views {
+            tasks.push(self.reveal_selected_entry(view));
+        }
+        Task::batch(tasks)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -505,8 +603,7 @@ impl Desktop {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         if let Message::MotionFrame(now) = message {
-            self.tick_entry_motion(now);
-            return Task::none();
+            return self.tick_entry_motion(now);
         }
         if let Message::WorkspaceEpoch(epoch, message) = message {
             return if epoch == self.application.workspace_epoch() {
@@ -529,6 +626,10 @@ impl Desktop {
             Message::Updates(action) => self.updates_action(action),
             Message::ThumbnailCompleted(receipt) => self.thumbnail_completed(receipt),
             Message::FlushExternalDrop => self.flush_external_drop(),
+            Message::TypeJumpBeginFade(now) => {
+                self.type_jump.begin_fade(now);
+                Task::none()
+            }
             Message::NativeQuit(epoch) => self.native_quit(epoch),
             Message::NativeMenu(request) => self.native_menu(request),
             Message::WindowAppearanceObserved(capability) => {
@@ -548,10 +649,19 @@ impl Desktop {
         let outbound = self.reconcile_outbound_drag();
         let picker = self.reconcile_picker();
         let column_previews = self.sync_column_previews();
+        let file_actions = self.reconcile_file_actions();
+        let type_jump = self.reconcile_type_jump();
         self.sync_updates();
         self.sync_application_menu();
         self.sync_diagnostics();
-        Task::batch([task, outbound, picker, column_previews])
+        Task::batch([
+            task,
+            outbound,
+            picker,
+            column_previews,
+            file_actions,
+            type_jump,
+        ])
     }
 
     fn active_picker_generation(&self) -> Option<u64> {
@@ -622,6 +732,10 @@ impl Desktop {
             message @ (Message::OpenTabMenu(..)
             | Message::DismissTabMenu(_)
             | Message::CloseMenuTab(_)
+            | Message::OpenSidebarMenu(..)
+            | Message::DismissSidebarMenu(_)
+            | Message::UnpinSidebarMenu(_)
+            | Message::EjectSidebarMenu(_)
             | Message::OpenEntryMenu(..)
             | Message::OpenFolderMenu(..)
             | Message::OpenPreviewFolderMenu(..)
@@ -644,6 +758,10 @@ impl Desktop {
             | Message::FinishTabDrag
             | Message::TabRailScrolled(..)
             | Message::FocusTab(_)) => self.tab_message(message),
+            message @ (Message::SidebarScrolled(..)
+            | Message::SidebarPinPressed(..)
+            | Message::SidebarLocationActivated(..)
+            | Message::EjectSidebarVolume(..)) => self.sidebar_message(message),
             Message::FolderChanges(batch) => self.folder_changes(batch),
             message @ (Message::LayoutPressed { .. }
             | Message::LayoutPointerMoved(_)
@@ -686,6 +804,9 @@ impl Desktop {
             | Message::RetryWorkspaceManagement
             | Message::CancelWorkspaceManagement) => self.workspace_management_message(message),
             Message::About(action) => self.about_message(action),
+            Message::Search(action) => self.search_message(action),
+            Message::SearchCompleted(completion) => self.search_completed(completion),
+            Message::SearchResultOpened(completion) => self.search_result_opened(completion),
             message @ (Message::OpenAppSettings
             | Message::AppSettingsChanged(_)
             | Message::AppAppearanceEdited(_)
@@ -693,6 +814,7 @@ impl Desktop {
             | Message::AppFontExplorer(_)
             | Message::AppTypographyChanged(_)
             | Message::AppAccessSafetyEdited(_)
+            | Message::AppCapabilitiesChanged(_)
             | Message::ChooseAppFolder
             | Message::AppFolderChosen(..)
             | Message::ApplyAppSettings
@@ -734,15 +856,9 @@ impl Desktop {
         let recovery_visible_before =
             self.storage_details && self.application.storage_detail().is_some();
         let epoch_before = self.application.workspace_epoch();
-        let active_before: HashMap<_, _> = self
-            .application
-            .workspace()
-            .boxes()
-            .iter()
-            .map(|item| (item.id, item.active_view().view))
-            .collect();
+        let boxes_before = self.snapshot_boxes_before();
         let settings_before = self.visibility_before(&action);
-        let undo_before = self.undo_views_before(&action);
+        let folders_before = self.view_folders();
         let restored = matches!((&action, self.application.persistence()),
             (Action::StorageCompleted(crate::application::contracts::storage::StorageCompletion::Loaded { session, .. }),
             crate::application::contracts::storage::PersistenceState::Loading(current)) if session == current);
@@ -762,12 +878,22 @@ impl Desktop {
             _ => None,
         };
         let completed_view = self.listing_completion_context(&action);
+        let locations_updated = matches!(action, Action::LocationsLoaded { .. });
+        let ejected_feedback = match &action {
+            Action::VolumeEjected { box_id, result, .. } => Some((*box_id, result.clone())),
+            _ => None,
+        };
         effects.extend(self.application.update(action));
+        if locations_updated {
+            self.sync_app_settings_locations();
+        }
+        self.apply_eject_feedback(ejected_feedback);
+        self.refresh_open_tile_search();
         let switched = epoch_before != self.application.workspace_epoch() && !restored;
         if switched {
             self.clear_workspace_context();
         }
-        self.sync_editing_views(undo_before);
+        let skip_reset = self.will_reset_navigated_presentation(completed_view.as_ref());
         let (recovery_opened, modal_effects) = self.reconcile_runtime_context(
             restored,
             closing,
@@ -775,17 +901,120 @@ impl Desktop {
             recovery_visible_before,
         );
         effects.extend(modal_effects);
+        let relocation_task =
+            self.sync_editing_views(&folders_before, skip_reset, restored || switched);
+        self.seed_missing_view_presentations();
         let mut task = self.complete_listing_task(completed_view);
+        let sort_restore = self.apply_pending_active_restores();
         self.sync_box_settings();
         self.sync_launchers();
         self.reconcile_context_menus();
+        let type_jump = self.reconcile_type_jump();
         task = Task::batch([
             task,
+            relocation_task,
+            sort_restore,
+            type_jump,
             self.reconcile_box_settings(settings_before),
             self.effects(effects),
         ]);
+        let post_focus = self.finish_dispatch_focus(
+            restored,
+            switched,
+            clear_focus,
+            recovery_opened,
+            typed_view,
+        );
+        Task::batch([
+            task,
+            post_focus,
+            self.restore_box_form(),
+            self.fill_thumbnails(),
+            if restored || switched {
+                Task::none()
+            } else {
+                self.reconcile_boxes_after(boxes_before)
+            },
+        ])
+    }
+
+    fn apply_eject_feedback(
+        &mut self,
+        feedback: Option<(crate::domain::BoxId, Result<(), String>)>,
+    ) {
+        let Some((box_id, result)) = feedback else {
+            return;
+        };
+        if let Some(item) = self
+            .application
+            .workspace()
+            .boxes()
+            .iter()
+            .find(|item| item.id == box_id)
+        {
+            let active_view = item.active_view().view;
+            self.views.entry(active_view).or_default().hint = result.err();
+        }
+    }
+
+    fn search_completed(
+        &mut self,
+        completion: crate::application::files::search::SearchCompletion,
+    ) -> Task<Message> {
+        self.pending_search = None;
+        let task = self.dispatch(Action::SearchSystemCompleted(completion));
+        if let Some(state) = &mut self.search {
+            state.clamp_selection(&self.application);
+        }
+        task
+    }
+
+    fn search_result_opened(
+        &mut self,
+        completion: crate::application::files::search::SearchOpenCompletion,
+    ) -> Task<Message> {
+        self.pending_search_open = None;
+        let succeeded = completion.result.is_ok();
+        let task = self.dispatch(Action::SearchResultOpened(completion));
+        let obstructed = (self.storage_details && self.application.storage_detail().is_some())
+            || self.native_menu.error().is_some()
+            || self.about.is_some()
+            || self.app_settings.is_some()
+            || self.workspace_management.is_some();
+        if succeeded && self.search.is_some() && !obstructed {
+            return Task::batch([task, self.close_search()]);
+        }
+        task
+    }
+
+    fn refresh_open_tile_search(&mut self) {
+        if let Some(state) = &mut self.search
+            && state.has_query()
+        {
+            state.open_tiles = self.application.search_open_tiles(&state.query);
+            state.clamp_selection(&self.application);
+        }
+    }
+
+    fn clear_search_overlay(&mut self) {
+        self.pending_search = None;
+        self.pending_search_open = None;
+        if self.search.take().is_some() {
+            self.application.update(Action::CancelSearch);
+        }
+    }
+
+    fn finish_dispatch_focus(
+        &mut self,
+        restored: bool,
+        switched: bool,
+        clear_focus: bool,
+        recovery_opened: bool,
+        typed_view: Option<ViewId>,
+    ) -> Task<Message> {
+        let mut tasks = Vec::new();
         if restored {
-            task = Task::batch([task, self.restore_window_if_ready()]);
+            tasks.push(self.restore_window_if_ready());
         }
         if let Some(view) = typed_view
             && matches!(self.application.load(view), Some(LoadState::Failed { .. }))
@@ -793,34 +1022,22 @@ impl Desktop {
             self.views.entry(view).or_default().invalid = true;
         }
         if switched {
-            task = Task::batch([
-                task,
-                if self.workspace_management.is_some() {
-                    operation::focus("workspace-management-cancel")
-                } else {
-                    operation::focus("workspace-canvas")
-                },
-            ]);
+            tasks.push(if self.workspace_management.is_some() {
+                operation::focus("workspace-management-cancel")
+            } else {
+                operation::focus("workspace-canvas")
+            });
         }
         if clear_focus {
-            task = Task::batch([task, self.focus_canvas()]);
+            tasks.push(self.focus_canvas());
         }
         if recovery_opened {
-            task = Task::batch([
-                task,
-                storage_dialog::focus_initial(&self.application, self.startup_confirmation),
-            ]);
+            tasks.push(storage_dialog::focus_initial(
+                &self.application,
+                self.startup_confirmation,
+            ));
         }
-        Task::batch([
-            task,
-            self.restore_box_form(),
-            self.fill_thumbnails(),
-            if restored || switched {
-                Task::none()
-            } else {
-                self.reconcile_tab_activation(active_before)
-            },
-        ])
+        Task::batch(tasks)
     }
 
     fn clear_workspace_context(&mut self) {
@@ -835,9 +1052,12 @@ impl Desktop {
         self.configuration_reads.clear();
         self.metadata_reads.clear();
         self.pending_open = None;
+        self.clear_search_overlay();
         self.launchers = launchers::Runtime::default();
         self.box_settings = None;
         self.tab_drag = None;
+        self.sidebar_offsets.clear();
+        self.sidebar_drag = None;
         self.file_drag.clear();
         self.edit_anchor = None;
     }
@@ -865,6 +1085,8 @@ impl Desktop {
         }
         if closing {
             self.pending_reads.clear();
+            self.pending_locations = None;
+            self.clear_search_overlay();
             self.column_previews.clear_pending();
         }
         self.sync_configuration_dialogs(restored, new_save_failure);
@@ -890,6 +1112,7 @@ impl Desktop {
             || restored && self.application.can_retry_startup()
         {
             self.about = None;
+            self.clear_search_overlay();
             self.application.update(Action::CancelAppSettings);
             self.app_settings = None;
             if !self.application.workspace_management_pending() {
@@ -906,10 +1129,16 @@ impl Desktop {
         if !self.application.app_settings_open() {
             self.app_settings = None;
         }
+        if !self.application.accepts_edits()
+            || self.application.workspace().mode() != crate::domain::Mode::Browse
+        {
+            self.clear_search_overlay();
+        }
         if self.modal_open() {
             self.window_drag = WindowDrag::Idle;
             self.cancel_card_drag();
             self.tab_drag = None;
+            self.sidebar_drag = None;
             self.file_drag.clear();
         }
     }

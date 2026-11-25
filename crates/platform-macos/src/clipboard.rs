@@ -2,10 +2,8 @@
 use file_tile_platform_macos_appkit::file_url::{FileUrlError, decode_nsurl};
 use objc2::{MainThreadMarker, runtime::ProtocolObject};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
-use objc2_foundation::{NSArray, NSString, NSURL, NSUTF8StringEncoding};
+use objc2_foundation::{NSArray, NSString, NSURL};
 use std::path::PathBuf;
-
-use super::file_urls::MAX_PATH_BYTES;
 
 const FILE_LIMIT: usize = 128;
 const CUT_TYPE: &str = "com.michalkups.file-tile.cut-files";
@@ -109,15 +107,9 @@ fn read_from(board: &NSPasteboard) -> Result<Files, String> {
         let value = item
             .stringForType(&kind)
             .ok_or("Clipboard does not provide readable file references. Copy files in file-tile or Finder, allow clipboard access if asked, and retry Paste.")?;
-        if !value.canBeConvertedToEncoding(NSUTF8StringEncoding) {
-            return Err("Cannot decode this native file URL without losing characters. Use Finder for this entry.".into());
-        }
-        if value.len_utf16() > MAX_PATH_BYTES * 3 + 8 {
-            return Err("Clipboard file URL exceeds the supported path limit. Use Finder.".into());
-        }
         let url = NSURL::URLWithString(&value)
             .ok_or("Clipboard contains a non-file URL. Copy local files first.")?;
-        let path = decode_nsurl(&url, false).map_err(describe_clipboard_url_error)?;
+        let path = decode_nsurl(&url, true).map_err(describe_clipboard_url_error)?;
         if !paths.contains(&path) {
             paths.push(path);
         }

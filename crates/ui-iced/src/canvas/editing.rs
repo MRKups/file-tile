@@ -1,9 +1,11 @@
 //! Pointer anchors and presentation reconciliation, not another workspace model.
 
 use crate::application::Action;
-use crate::domain::{BoxId, GridDelta, LayoutKind, Navigation, ViewId};
-use crate::{Desktop, Message, canvas::geometry::PITCH, canvas::layout_controls};
-use iced::{Point, Task};
+use crate::domain::{BoxId, GridDelta, LayoutKind, ViewId};
+use crate::{Desktop, Message, boxes::file_list, canvas::geometry::PITCH, canvas::layout_controls};
+use iced::{Point, Task, widget::operation};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Anchor {
@@ -16,7 +18,14 @@ impl Desktop {
     pub(crate) fn prepare_action_focus(&mut self, action: &Action) -> bool {
         self.observe_file_action_presentation(action);
         if matches!(action, Action::ActivateLauncher(_)) {
-            self.active_view = None;
+            self.deactivate_all_views();
+        } else if let Action::Navigate(view, nav) = action
+            && !matches!(nav, crate::application::Navigate::Refresh)
+            && self.application.workspace().mode() == crate::domain::Mode::Browse
+            && self.application.workspace().can_browse(*view)
+        {
+            self.type_jump.dismiss_session();
+            self.activate_view(*view);
         }
         matches!(
             action,
@@ -31,24 +40,23 @@ impl Desktop {
         self.focus_version = self.focus_version.saturating_add(1);
         iced::widget::operation::focus("workspace-canvas")
     }
-    pub(crate) fn undo_views_before(
-        &self,
-        action: &Action,
-    ) -> Option<std::collections::HashMap<ViewId, Navigation>> {
-        matches!(action, Action::Undo).then(|| {
-            self.application
-                .workspace()
-                .all_views()
-                .map(|item| (item.view, item.navigation.clone()))
-                .collect()
-        })
+    pub(crate) fn view_folders(&self) -> HashMap<ViewId, PathBuf> {
+        self.application
+            .workspace()
+            .all_views()
+            .map(|item| (item.view, item.navigation.current().to_path_buf()))
+            .collect()
     }
 
     pub(crate) fn reset_restored_views(&mut self) {
         self.pending_reads.clear();
         self.views.clear();
         self.tab_offsets.clear();
+        self.tab_drag = None;
+        self.sidebar_offsets.clear();
+        self.sidebar_drag = None;
         self.active_view = None;
+        self.type_jump = crate::runtime::type_jump::State::default();
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
         self.canvas_offset = iced::Vector::ZERO;
@@ -154,8 +162,10 @@ impl Desktop {
 
     pub(crate) fn sync_editing_views(
         &mut self,
-        before: Option<std::collections::HashMap<ViewId, Navigation>>,
-    ) {
+        before: &HashMap<ViewId, PathBuf>,
+        skip_reset: Option<ViewId>,
+        full_reset: bool,
+    ) -> Task<Message> {
         self.views
             .retain(|view, _| self.application.workspace().view(*view).is_some());
         self.active_view = self
@@ -172,15 +182,30 @@ impl Desktop {
         if self.application.workspace().layout_preview().is_none() {
             self.edit_anchor = None;
         }
-        if let Some(before) = before {
-            for item in self.application.workspace().all_views() {
-                if before
+        if full_reset {
+            return Task::batch(self.application.workspace().active_views().map(|item| {
+                operation::scroll_to(
+                    file_list::scroll_id(item.view),
+                    operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+                )
+            }));
+        }
+        let mut resets = Vec::new();
+        for item in self.application.workspace().all_views() {
+            if Some(item.view) != skip_reset
+                && before
                     .get(&item.view)
-                    .is_some_and(|navigation| navigation.current() != item.navigation.current())
-                {
-                    self.views.remove(&item.view);
+                    .is_some_and(|folder| folder != item.navigation.current())
+            {
+                self.views.remove(&item.view);
+                if self.application.workspace().is_active(item.view) {
+                    resets.push(operation::scroll_to(
+                        file_list::scroll_id(item.view),
+                        operation::AbsoluteOffset { x: 0.0, y: 0.0 },
+                    ));
                 }
             }
         }
+        Task::batch(resets)
     }
 }

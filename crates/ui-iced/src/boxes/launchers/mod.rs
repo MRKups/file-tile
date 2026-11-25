@@ -149,14 +149,14 @@ impl Desktop {
             picker: None,
         });
         self.focused_path = None;
-        self.active_view = None;
+        self.deactivate_all_views();
         self.focus_version = self.focus_version.saturating_add(1);
     }
 
     pub(crate) fn launcher_event(&mut self, event: Event) -> Task<Message> {
         if let Event::FocusChecked(version) = event {
             if version == self.focus_version {
-                self.active_view = None;
+                self.deactivate_all_views();
                 self.focused_path = None;
             }
             return Task::none();

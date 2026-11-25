@@ -70,6 +70,13 @@ pub(crate) fn name_id(view: ViewId) -> String {
 }
 
 impl Desktop {
+    pub(crate) fn clear_trash_drafts(&mut self) {
+        for state in self.views.values_mut() {
+            state.name_draft = None;
+            state.trash_draft = None;
+        }
+    }
+
     pub(crate) fn anchor_file_prompt(&mut self, view: ViewId, point: iced::Point) {
         let geometry = self.geometry();
         let anchor = self
@@ -89,7 +96,7 @@ impl Desktop {
     }
     pub(crate) fn file_escape(&mut self) -> Option<Task<Message>> {
         if let Some(operation) = self.application.file_operation()
-            && self.active_view == Some(operation.view)
+            && self.application.workspace().is_active(operation.view)
             && let Phase::Conflict(job) = &operation.phase
         {
             return Some(self.dispatch(Action::ResolveFileConflict(
@@ -98,23 +105,29 @@ impl Desktop {
                 ConflictChoice::Cancel,
             )));
         }
-        let view = self.active_view?;
-        let state = self.views.get(&view)?;
-        if let Some(draft) = &state.trash_draft {
-            let generation = draft.generation;
+        let trash_target = self
+            .views
+            .iter()
+            .filter(|(view, _)| self.application.workspace().is_active(**view))
+            .find_map(|(view, state)| state.trash_draft.as_ref().map(|d| (*view, d.generation)));
+        if let Some((view, generation)) = trash_target {
             return Some(self.file_action_message(Message::TrashPrompt(view, generation, false)));
         }
-        let generation = state.name_draft.as_ref()?.generation;
+        let name_target = self
+            .views
+            .iter()
+            .filter(|(view, _)| self.application.workspace().is_active(**view))
+            .find_map(|(view, state)| state.name_draft.as_ref().map(|d| (*view, d.generation)));
+        let (view, generation) = name_target?;
         Some(self.file_action_message(Message::CancelName(view, generation)))
     }
     pub(crate) fn file_editor_active(&self) -> bool {
-        self.active_view.is_some_and(|view| {
-            self.views
-                .get(&view)
-                .is_some_and(|state| state.name_draft.is_some() || state.trash_draft.is_some())
-                || self.application.file_operation().is_some_and(|operation| {
-                    operation.view == view && matches!(operation.phase, Phase::Conflict(_))
-                })
+        self.views.iter().any(|(view, state)| {
+            self.application.workspace().is_active(*view)
+                && (state.name_draft.is_some() || state.trash_draft.is_some())
+        }) || self.application.file_operation().is_some_and(|operation| {
+            self.application.workspace().is_active(operation.view)
+                && matches!(operation.phase, Phase::Conflict(_))
         })
     }
     pub(crate) fn file_write_guidance(&self, view: ViewId) -> &'static str {
@@ -235,7 +248,16 @@ impl Desktop {
         }
         self.focus_version = self.focus_version.saturating_add(1);
         let generation = self.focus_version;
-        self.active_view = Some(view);
+        if self
+            .column_previews
+            .get(view)
+            .is_some_and(|preview| preview.directory == directory)
+        {
+            self.activate_column_preview(view);
+        } else {
+            self.cancel_pending_scroll_restore(view);
+            self.activate_view(view);
+        }
         self.focused_path = None;
         let end = if !stem {
             value.chars().count()
@@ -451,7 +473,16 @@ impl Desktop {
         }
         self.focus_version = self.focus_version.saturating_add(1);
         let generation = self.focus_version;
-        self.active_view = Some(view);
+        if self
+            .column_previews
+            .get(view)
+            .is_some_and(|preview| preview.directory == directory)
+        {
+            self.activate_column_preview(view);
+        } else {
+            self.cancel_pending_scroll_restore(view);
+            self.activate_view(view);
+        }
         self.focused_path = None;
         let state = self.views.entry(view).or_default();
         state.hint = None;
@@ -555,10 +586,16 @@ impl Desktop {
             iced::keyboard::Key::Character("a" | "A") => {
                 let paths: Vec<_> = self
                     .application
-                    .ordered_entries(view)
-                    .map(|entry| entry.path.clone())
+                    .jump_candidates(view)
+                    .into_iter()
+                    .map(|cand| cand.entry.path.clone())
                     .collect();
+                self.type_jump.dismiss_session();
+                self.cancel_pending_scroll_restore(view);
+                self.column_previews.clear_selection(view);
+                self.column_previews.set_focused(None);
                 let state = self.views.entry(view).or_default();
+                state.reveal_after_motion = false;
                 state.selected = paths.first().cloned();
                 state.selection_anchor = paths.first().cloned();
                 state.selection = paths.into_iter().collect();
@@ -603,6 +640,7 @@ impl Desktop {
                         .view(*view)
                         .is_some_and(|v| v.navigation.current() == directory);
                     if is_primary {
+                        self.cancel_pending_scroll_restore(*view);
                         if let Some(presentation) = self.views.get_mut(view) {
                             presentation.selection.clear();
                             presentation.pending_selection.clear();
@@ -752,7 +790,9 @@ impl Desktop {
                     .is_none_or(|(id, step, _)| *id != operation.id || *step != job.step)
                 {
                     self.conflict_name = Some((operation.id, job.step, keep_both_name(&job.name)));
-                    if self.active_view == Some(operation.view)
+                    if (self.active_view == Some(operation.view)
+                        || (self.active_view.is_none() && self.focused_path.is_none()))
+                        && self.application.workspace().is_active(operation.view)
                         && !self.modal_open()
                         && !self.context_menu_open()
                     {

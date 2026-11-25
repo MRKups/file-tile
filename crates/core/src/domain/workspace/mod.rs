@@ -3,9 +3,10 @@ use std::path::PathBuf;
 mod configuration;
 mod editing;
 mod launchers;
+mod scroll;
 mod shape;
 mod tabs;
-pub use configuration::{BoxSetting, BoxSettings, FileView};
+pub use configuration::{BoxSetting, BoxSettings, FileView, LeftPanel};
 pub use launchers::{ItemPlacement, LauncherConfig, LauncherIcon, LauncherTarget, LauncherTile};
 pub use shape::{DrawPreview, DrawRejection, ItemKind};
 pub use tabs::{FolderView, TabCommand, Tabs, ViewRef};
@@ -133,6 +134,9 @@ impl Workspace {
         if previous.len() >= Self::MAX_BOXES {
             return Err("workspace box limit exceeded");
         }
+        if item.settings.sidebar && item.has_visible_tabs() {
+            return Err("box cannot show sidebar and vertical tabs simultaneously");
+        }
         if item.id.0 == 0 || item.views().any(|view| view.view.0 == 0) {
             return Err("box and view identities must be positive");
         }
@@ -190,6 +194,7 @@ impl Workspace {
                 view: view.view,
                 navigation: &view.navigation,
                 settings: item.settings,
+                top_item: view.top_item,
             })
         })
     }
@@ -207,7 +212,11 @@ impl Workspace {
     }
     pub fn prune_removed_path(&mut self, source: &std::path::Path) {
         for view in self.boxes.iter_mut().flat_map(FolderBox::views_mut) {
+            let before = view.navigation.current().to_path_buf();
             view.navigation.prune_removed_path(source);
+            if view.navigation.current() != before {
+                view.top_item = 0;
+            }
         }
     }
     pub fn is_active(&self, view: ViewId) -> bool {
@@ -329,10 +338,7 @@ impl Workspace {
                             id,
                             rect,
                             settings: BoxSettings::default(),
-                            standalone: FolderView {
-                                view,
-                                navigation: Navigation::new(start),
-                            },
+                            standalone: FolderView::new(view, Navigation::new(start)),
                             tabs: None,
                         });
                         self.selected = Some(id);

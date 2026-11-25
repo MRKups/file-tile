@@ -19,12 +19,28 @@ impl Desktop {
         // Keep routing aligned with visible overlays, with recovery first.
         if self.storage_details && self.application.storage_detail().is_some() {
             Some(self.recovery_input(event.clone()))
+        } else if self.native_menu.error().is_some() {
+            Some(match event {
+                Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab),
+                    repeat: false,
+                    ..
+                }) => iced::widget::operation::focus("native-menu-close"),
+                _ => iced::Task::none(),
+            })
         } else if self.workspace_management.is_some() {
             Some(self.workspace_management_input(event.clone()))
-        } else if self.app_settings.is_some() {
-            Some(self.app_settings_input(event.clone(), status))
         } else if self.about.is_some() {
             Some(self.about_input(event.clone()))
+        } else if self.app_settings.is_some() {
+            Some(self.app_settings_input(event.clone(), status))
+        } else if self.search.is_some() {
+            Some(self.search_input(event.clone(), status))
+        } else if self.context_menu_open()
+            && is_open_search_shortcut(event)
+            && self.can_open_search(true)
+        {
+            Some(self.open_search())
         } else if self.sort_menu.is_some() {
             if matches!(
                 event,
@@ -39,6 +55,8 @@ impl Desktop {
             }
         } else if self.tab_menu.is_some() {
             Some(self.tab_menu_input(event.clone()))
+        } else if self.sidebar_menu.is_some() {
+            Some(self.sidebar_menu_input(event.clone()))
         } else if self.entry_menu.is_some() {
             Some(self.entry_menu_input(event.clone()))
         } else if let Some(menu) = &self.folder_menu {
@@ -57,6 +75,21 @@ impl Desktop {
             None
         }
     }
+}
+
+fn is_open_search_shortcut(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Character(ch),
+            modifiers,
+            repeat: false,
+            ..
+        }) if !modifiers.shift()
+            && !modifiers.alt()
+            && (modifiers.command() || modifiers.control())
+            && ch.eq_ignore_ascii_case("f")
+    )
 }
 
 struct State;

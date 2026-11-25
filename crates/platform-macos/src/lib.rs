@@ -17,9 +17,11 @@ pub mod moving;
 mod opening;
 pub mod permissions;
 pub mod renaming;
+pub mod search;
 mod system_font;
 pub mod trash;
 pub mod updater;
+pub mod volumes;
 
 pub use datetime::format_local_datetime;
 pub use displays::{DisplayBounds, display_areas, system_accent_color, window_cursor_position};

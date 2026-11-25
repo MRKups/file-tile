@@ -10,6 +10,13 @@ use crate::{Desktop, Message, boxes::file_list, boxes::navigation_header};
 pub(crate) fn folder_id(view: ViewId) -> String {
     format!("box-settings-folder-{}", view.0)
 }
+pub(super) fn configured_folder_path(item: &crate::domain::FolderBox) -> &std::path::Path {
+    if item.has_visible_tabs() {
+        item.default_folder()
+    } else {
+        item.active_view().navigation.current()
+    }
+}
 pub(crate) const CARD_ID: &str = "box-settings-card";
 pub(crate) const FIELDS_ID: &str = "box-settings-fields";
 pub(crate) const HANDLE_ID: &str = "box-settings-handle";
@@ -109,12 +116,39 @@ impl Draft {
     pub(crate) fn clear_picker(&mut self) {
         self.picker = None;
     }
+
+    fn for_box(item: &crate::domain::FolderBox, home: &std::path::Path, position: Point) -> Self {
+        let mut range = crate::dialogs::range_editor::Draft::new();
+        range.sync(item.active_view().navigation.scope().range(), false, false);
+        Self {
+            range_page: false,
+            form_restore: false,
+            form_offset: 0.0,
+            picker: None,
+            picker_error: None,
+            range,
+            tree_offset: 0.0,
+            scope_kind: item.active_view().navigation.scope().kind(),
+            id: item.id,
+            view: item.active_view().view,
+            folder: navigation_header::display_path(configured_folder_path(item), home),
+            edited: false,
+            revision: 0,
+            submitted: None,
+            focused: false,
+            position,
+            drag: None,
+        }
+    }
 }
 
 impl Desktop {
     pub(crate) fn visibility_before(&self, action: &Action) -> Vec<(ViewId, BoxSettings)> {
         match action {
-            Action::Undo => self
+            Action::Undo
+            | Action::StorageCompleted(
+                crate::application::contracts::storage::StorageCompletion::BudgetChecked { .. },
+            ) => self
                 .application
                 .workspace()
                 .boxes()
@@ -200,7 +234,7 @@ impl Desktop {
         }
         self.focused_path = focused;
         if let Some(view) = focused {
-            self.active_view = Some(view);
+            self.activate_view(view);
             // A captured click can leave another editor focused beneath the stack.
             return operation::focus(navigation_header::path_id(view));
         }
@@ -257,7 +291,7 @@ impl Desktop {
                 }
                 if !draft.edited {
                     draft.folder = navigation_header::display_path(
-                        item.active_view().navigation.current(),
+                        configured_folder_path(item),
                         self.application.home(),
                     );
                 }
@@ -274,35 +308,17 @@ impl Desktop {
             y: rect.y + geometry.viewport.y - geometry.offset.y,
             ..rect
         };
-        self.box_settings = Some(Draft {
-            range_page: false,
-            form_restore: false,
-            form_offset: 0.0,
-            picker: None,
-            picker_error: None,
-            range: crate::dialogs::range_editor::Draft::new(),
-            tree_offset: 0.0,
-            scope_kind: item.active_view().navigation.scope().kind(),
-            id: item.id,
-            view: item.active_view().view,
-            folder: navigation_header::display_path(
-                item.active_view().navigation.current(),
-                self.application.home(),
-            ),
-            edited: false,
-            revision: 0,
-            submitted: None,
-            focused: false,
-            position: initial_position(self.size, geometry.header_height, target),
-            drag: None,
-        });
+        let position = self
+            .box_settings
+            .as_ref()
+            .filter(|draft| draft.id == item.id)
+            .map_or_else(
+                || initial_position(self.size, geometry.header_height, target),
+                |draft| draft.position,
+            );
+        self.box_settings = Some(Draft::for_box(item, self.application.home(), position));
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
-        if let Some(draft) = &mut self.box_settings {
-            draft
-                .range
-                .sync(item.active_view().navigation.scope().range(), false, false);
-        }
     }
 
     pub(crate) fn box_settings_message(&mut self, message: Message) -> Task<Message> {
@@ -420,9 +436,9 @@ impl Desktop {
             && draft.submitted == Some((generation, draft.revision))
         {
             draft.submitted = None;
-            if succeeded && let Some(item) = self.application.workspace().view(view) {
+            if succeeded && let Some(box_item) = self.application.workspace().box_for_view(view) {
                 draft.folder = navigation_header::display_path(
-                    item.navigation.current(),
+                    configured_folder_path(box_item),
                     self.application.home(),
                 );
                 draft.edited = false;
@@ -459,21 +475,14 @@ impl Desktop {
                     .workspace()
                     .view(view)
                     .filter(|item| old != item.settings)
-                    .map(|item| {
-                        (
-                            view,
-                            old.file_view,
-                            item.settings.file_view,
-                            old.show_hidden != item.settings.show_hidden,
-                        )
-                    })
+                    .map(|item| (view, old, item.settings, item.top_item))
             })
             .collect();
         Task::batch(
             changed
                 .into_iter()
-                .map(|(view, old_layout, layout, hidden_changed)| {
-                    self.reconcile_view_settings(view, old_layout, layout, hidden_changed, ty)
+                .map(|(view, old_settings, new_settings, top_item)| {
+                    self.reconcile_view_settings(view, old_settings, new_settings, top_item, ty)
                 }),
         )
     }
@@ -481,98 +490,155 @@ impl Desktop {
     fn reconcile_view_settings(
         &mut self,
         view: ViewId,
-        old_layout: crate::domain::FileView,
-        layout: crate::domain::FileView,
-        hidden_changed: bool,
+        old_settings: BoxSettings,
+        new_settings: BoxSettings,
+        saved_top_item: u32,
         ty: crate::window::typography::Style,
     ) -> Task<Message> {
-        let width = self
-            .application
-            .workspace()
-            .boxes()
-            .iter()
-            .find(|item| item.views().any(|candidate| candidate.view == view))
-            .map_or(1.0, |item| {
-                let rect = self.geometry().rect(item.rect);
-                rect.width - crate::boxes::tab_rail::width(item, rect.width)
-            });
-        let show_hidden = self
-            .application
-            .workspace()
-            .view(view)
-            .is_some_and(|item| item.settings.show_hidden);
+        let geometry = self.geometry();
+        let scrollers = self.application.workspace().box_for_view(view).map(|item| {
+            (
+                crate::boxes::folder_box::scroller_geometry_with_settings(
+                    geometry,
+                    item,
+                    old_settings,
+                ),
+                crate::boxes::folder_box::scroller_geometry_with_settings(
+                    geometry,
+                    item,
+                    new_settings,
+                ),
+            )
+        });
+        let show_hidden = new_settings.show_hidden;
+        let hidden_changed = old_settings.show_hidden != show_hidden;
+        let old_layout = old_settings.file_view;
+        let layout = new_settings.file_view;
+        let listing = self.application.load(view).and_then(LoadState::listing);
         let Some(presentation) = self.views.get_mut(&view) else {
             return Task::none();
         };
         if hidden_changed {
             presentation.motion = None;
         }
+        retain_visible_selection(presentation, listing, show_hidden);
         if old_layout != layout {
-            let old_columns = if old_layout == crate::domain::FileView::Grid {
-                crate::boxes::file_grid::columns(width, ty)
-            } else {
-                1
-            };
-            let old_height = if old_layout == crate::domain::FileView::Grid {
-                ty.row(crate::boxes::file_grid::TILE_HEIGHT)
-            } else {
-                ty.row(file_list::ROW_HEIGHT)
-            };
-            let index =
-                (presentation.scroll.offset / old_height).floor().max(0.0) as usize * old_columns;
-            let new_columns = if layout == crate::domain::FileView::Grid {
-                crate::boxes::file_grid::columns(width, ty)
-            } else {
-                1
-            };
-            let new_height = if layout == crate::domain::FileView::Grid {
-                ty.row(crate::boxes::file_grid::TILE_HEIGHT)
-            } else {
-                ty.row(file_list::ROW_HEIGHT)
-            };
-            presentation.scroll.offset = (index / new_columns) as f32 * new_height;
             presentation.hovered = None;
             presentation.earlier_ancestors = false;
         }
-        let listing = self.application.load(view).and_then(LoadState::listing);
-        let visible = |path: &std::path::Path| {
-            if !show_hidden
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.as_encoded_bytes().first() == Some(&b'.'))
-            {
-                return false;
-            }
-            listing.is_none_or(|listing| {
-                listing
-                    .entry(path)
-                    .is_some_and(|entry| show_hidden || !entry.hidden)
-            })
+        let Some(listing) = listing else {
+            self.reseed_unloaded_scroll(view, saved_top_item);
+            return Task::none();
         };
-        presentation.selection.retain(|path| visible(path));
-        for selection in [
-            &mut presentation.selected,
-            &mut presentation.hovered,
-            &mut presentation.selection_anchor,
-        ] {
-            if selection.as_ref().is_some_and(|path| !visible(path)) {
-                *selection = None;
-            }
+        if presentation.pending_scroll_restore.is_some() {
+            return Task::none();
         }
-        if old_layout != layout {
+        let mut needs_scroll_to = old_layout != layout;
+        if let Some((old_scroller, new_scroller)) = scrollers {
+            needs_scroll_to |= update_scroller_offset(
+                &mut presentation.scroll.offset,
+                (old_scroller, new_scroller),
+                (old_settings, new_settings),
+                listing,
+                ty,
+            );
+        }
+        let offset = presentation.scroll.offset;
+        let revision = presentation.listing_revision;
+        self.sync_view_top_item(view);
+        if needs_scroll_to {
             operation::scroll_to(
                 file_list::scroll_id(view),
-                operation::AbsoluteOffset {
-                    x: 0.0,
-                    y: presentation.scroll.offset,
-                },
+                operation::AbsoluteOffset { x: 0.0, y: offset },
             )
-            .chain(file_list::observe_scroll(
-                view,
-                presentation.listing_revision,
-            ))
+            .chain(file_list::observe_scroll(view, revision))
         } else {
-            file_list::observe_scroll(view, presentation.listing_revision)
+            file_list::observe_scroll(view, revision)
+        }
+    }
+}
+
+fn update_scroller_offset(
+    offset: &mut f32,
+    (old_scroller, new_scroller): (
+        crate::boxes::folder_box::ScrollerGeometry,
+        crate::boxes::folder_box::ScrollerGeometry,
+    ),
+    (old_settings, new_settings): (BoxSettings, BoxSettings),
+    listing: &crate::application::contracts::directory::DirectoryListing,
+    ty: crate::window::typography::Style,
+) -> bool {
+    let old_layout = old_settings.file_view;
+    let layout = new_settings.file_view;
+    let hidden_changed = old_settings.show_hidden != new_settings.show_hidden;
+    let width_changed =
+        (old_scroller.content_width - new_scroller.content_width).abs() > f32::EPSILON;
+    let grid_reflow = layout == crate::domain::FileView::Grid
+        && crate::boxes::file_grid::columns(old_scroller.content_width, ty)
+            != crate::boxes::file_grid::columns(new_scroller.content_width, ty);
+    if old_layout != layout
+        || grid_reflow
+        || old_scroller.compact != new_scroller.compact
+        || (old_scroller.compact && old_scroller.nav_height != new_scroller.nav_height)
+    {
+        let index = crate::boxes::scroll_position::offset_to_top_item(
+            *offset,
+            old_scroller,
+            old_layout,
+            listing.display_len(old_settings.show_hidden),
+            ty,
+        );
+        *offset = crate::boxes::scroll_position::top_item_to_offset(
+            index,
+            new_scroller,
+            layout,
+            listing.display_len(new_settings.show_hidden),
+            ty,
+        );
+        return true;
+    }
+    if hidden_changed || width_changed {
+        let max_y = crate::boxes::scroll_position::max_scroll_offset(
+            new_scroller,
+            layout,
+            listing.display_len(new_settings.show_hidden),
+            ty,
+        );
+        if *offset > max_y {
+            *offset = max_y;
+            return true;
+        }
+    }
+    false
+}
+
+fn retain_visible_selection(
+    presentation: &mut crate::ViewPresentation,
+    listing: Option<&crate::application::contracts::directory::DirectoryListing>,
+    show_hidden: bool,
+) {
+    let visible = |path: &std::path::Path| {
+        if !show_hidden
+            && path
+                .file_name()
+                .is_some_and(|name| name.as_encoded_bytes().first() == Some(&b'.'))
+        {
+            return false;
+        }
+        listing.is_none_or(|listing| {
+            listing
+                .entry(path)
+                .is_some_and(|entry| show_hidden || !entry.hidden)
+        })
+    };
+    presentation.selection.retain(|path| visible(path));
+    for selection in [
+        &mut presentation.selected,
+        &mut presentation.hovered,
+        &mut presentation.selection_anchor,
+    ] {
+        if selection.as_ref().is_some_and(|path| !visible(path)) {
+            *selection = None;
         }
     }
 }

@@ -35,18 +35,23 @@ pub(super) fn file_details<'a>(
             .into()
     });
 
+    let mut meta = column![
+        meta_row(ty, palette, "Type", kind_label(entry)),
+        meta_row(ty, palette, "Size", metadata::size(value)),
+        meta_row(ty, palette, "Modified", metadata::date(value)),
+    ]
+    .spacing(5);
+    if entry.dataless {
+        meta = meta.push(meta_row(ty, palette, "Status", "Online only".into()));
+    }
+
     let mut fields = column![
         artwork,
         ty.text(entry.name.to_string_lossy())
             .font(ty.heading_font())
             .color(palette.text)
             .wrapping(text::Wrapping::WordOrGlyph),
-        column![
-            meta_row(ty, palette, "Type", kind_label(entry)),
-            meta_row(ty, palette, "Size", metadata::size(value)),
-            meta_row(ty, palette, "Modified", metadata::date(value)),
-        ]
-        .spacing(5),
+        meta,
     ]
     .spacing(10);
 

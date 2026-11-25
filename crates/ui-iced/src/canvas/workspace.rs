@@ -40,8 +40,14 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
                 &desktop.application,
                 desktop.size.width,
                 geometry.header_height,
-                desktop.workspace_input_enabled() && desktop.application.file_operation().is_none(),
-                desktop.application.can_configure_application() && !desktop.modal_open(),
+                workspace_header::Controls {
+                    search_enabled: desktop.can_open_search(true),
+                    search_open: desktop.search.is_some(),
+                    workspace_enabled: desktop.workspace_input_enabled()
+                        && desktop.application.file_operation().is_none(),
+                    settings_enabled: desktop.application.can_configure_application()
+                        && !desktop.modal_open(),
+                },
                 palettes.window
             ),
             container(super::surface::view(
@@ -51,6 +57,7 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
                 super::surface::Presentation {
                     tab_offsets: &desktop.tab_offsets,
                     tab_drag: desktop.tab_drag.as_ref(),
+                    sidebar_drag: desktop.sidebar_drag.as_ref(),
                     file_drag: &desktop.file_drag,
                     column_previews: &desktop.column_previews,
                     conflict_name: desktop
@@ -90,8 +97,10 @@ fn surface(desktop: &Desktop) -> Element<'_, Message> {
         stack![
             surface,
             tab_drag::view(desktop, palettes.boxes),
+            crate::boxes::sidebar::drag::view(desktop, palettes.boxes),
             file_drag::view(desktop, palettes.boxes),
-            inspector
+            inspector,
+            crate::widgets::keystroke_hud::view(desktop, palettes.boxes),
         ],
     );
     overlay(desktop, surface, palettes.boxes)
@@ -131,7 +140,25 @@ fn overlay<'a>(
         ]
         .into()
     } else if let Some(draft) = &desktop.app_settings {
-        stack![surface, opaque(app_settings::view(desktop, draft))].into()
+        let settings = crate::widgets::input_boundary::view(
+            desktop.about.is_some(),
+            opaque(app_settings::view(desktop, draft)),
+        );
+        if let Some(state) = &desktop.about {
+            stack![
+                surface,
+                settings,
+                opaque(crate::dialogs::about::view(
+                    state,
+                    &desktop.updates,
+                    desktop.size,
+                    palette,
+                ))
+            ]
+            .into()
+        } else {
+            stack![surface, settings, iced::widget::space()].into()
+        }
     } else if let Some(state) = &desktop.about {
         stack![
             surface,
@@ -143,10 +170,23 @@ fn overlay<'a>(
             ))
         ]
         .into()
+    } else if let Some(state) = &desktop.search {
+        stack![
+            surface,
+            opaque(crate::dialogs::search::view(
+                &desktop.application,
+                state,
+                desktop.size,
+                palette,
+            ))
+        ]
+        .into()
     } else if desktop.sort_menu.is_some() {
         stack![surface, crate::menus::sort_menu::view(desktop)].into()
     } else if desktop.tab_menu.is_some() {
         stack![surface, crate::menus::tab_menu::view(desktop)].into()
+    } else if desktop.sidebar_menu.is_some() {
+        stack![surface, crate::menus::sidebar_menu::view(desktop)].into()
     } else if desktop.entry_menu.is_some() {
         stack![surface, crate::menus::entry_menu::view(desktop)].into()
     } else if desktop.folder_menu.is_some() {

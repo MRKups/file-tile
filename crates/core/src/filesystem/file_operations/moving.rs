@@ -8,7 +8,7 @@ pub(super) fn perform(
     parent: &std::fs::Metadata,
     original: &mut Option<Identity>,
 ) -> Result<Outcome, Failure> {
-    let before = inspect_copy_source(source, &job.directory)?;
+    let before = inspect_copy_source(job, source, &job.directory)?;
     *original = Some(identity(&before));
     if job
         .rename_identity
@@ -31,6 +31,7 @@ pub(super) fn perform(
     if canonical_parent != source_parent {
         return Err("Move source folder is not its resolved path. Copy the source again from its actual folder.".into());
     }
+    super::check_mount_access(&job.safety.preferences, &canonical_parent)?;
     job.safety
         .check_entry_modification(source)
         .map_err(Failure::from)?;
@@ -130,6 +131,26 @@ fn cross_volume(
     {
         return Err("Destination folder changed before writing. Reopen it before retrying.".into());
     }
+    let from_id = identity(from_info);
+    let before_id = identity(before);
+    let is_dir = before.is_dir() && !before.file_type().is_symlink();
+    let tree_snapshot = if is_dir {
+        Some(
+            crate::platform::moving::snapshot_source_tree(
+                source,
+                (from_id.device, from_id.inode),
+                (before_id.device, before_id.inode),
+            )
+            .map_err(|message| {
+                Failure::safe(
+                    message,
+                    "Cannot verify the source folder before cross-volume move. No files were moved.",
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     crate::platform::file_copy::copy(source, destination).map_err(|message| {
         Failure::safe(
             message,
@@ -137,6 +158,20 @@ fn cross_volume(
         )
     })?;
     let outcome = confirm_output(job, destination, parent)?;
+    if let Some(snapshot) = &tree_snapshot {
+        crate::platform::moving::remove_verified_tree(
+            source,
+            (from_id.device, from_id.inode),
+            snapshot,
+        )
+        .map_err(|message| {
+            Failure::safe(
+                message,
+                "The folder was copied to the destination volume, but the original source could not be safely removed. Both copies were retained.",
+            )
+        })?;
+        return Ok(outcome);
+    }
     let after_source = std::fs::symlink_metadata(source).map_err(|error| {
         Failure::io(
             &error,
@@ -149,13 +184,16 @@ fn cross_volume(
     {
         return Err("Move source changed during cross-volume copy. Both the original source and destination copy were retained.".into());
     }
-    let from_id = identity(from_info);
-    let before_id = identity(before);
+    let (expected_size, expected_mtime) = {
+        use std::os::unix::fs::MetadataExt;
+        (before.len(), (before.mtime(), before.mtime_nsec()))
+    };
     crate::platform::moving::remove_verified_source(
         source,
         (from_id.device, from_id.inode),
         (before_id.device, before_id.inode),
-        before.is_dir() && !before.file_type().is_symlink(),
+        expected_size,
+        expected_mtime,
     )
     .map_err(|message| {
         Failure::safe(

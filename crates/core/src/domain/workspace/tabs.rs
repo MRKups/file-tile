@@ -6,6 +6,17 @@ use super::{BoxId, BoxSettings, FolderBox, Mode, Navigation, ViewId, Workspace};
 pub struct FolderView {
     pub view: ViewId,
     pub navigation: Navigation,
+    pub top_item: u32,
+}
+
+impl FolderView {
+    pub const fn new(view: ViewId, navigation: Navigation) -> Self {
+        Self {
+            view,
+            navigation,
+            top_item: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -14,13 +25,14 @@ pub struct ViewRef<'a> {
     pub view: ViewId,
     pub navigation: &'a Navigation,
     pub settings: BoxSettings,
+    pub top_item: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tabs {
-    views: Vec<FolderView>,
-    active: usize,
-    visible: bool,
+    pub(super) views: Vec<FolderView>,
+    pub(super) active: usize,
+    pub(super) visible: bool,
 }
 
 impl Tabs {
@@ -54,6 +66,49 @@ impl Tabs {
 }
 
 impl FolderBox {
+    pub fn has_visible_tabs(&self) -> bool {
+        self.tabs.as_ref().is_some_and(Tabs::visible)
+    }
+    pub fn has_sidebar(&self) -> bool {
+        self.settings.sidebar && !self.has_visible_tabs()
+    }
+    pub fn left_panel(&self) -> super::LeftPanel {
+        if self.has_visible_tabs() {
+            super::LeftPanel::VerticalTabs
+        } else if self.settings.sidebar {
+            super::LeftPanel::Sidebar
+        } else {
+            super::LeftPanel::None
+        }
+    }
+    pub fn default_folder(&self) -> &std::path::Path {
+        self.standalone.navigation.start()
+    }
+    pub(super) fn configure_default_folder(&mut self, path: std::path::PathBuf) {
+        let old_default = self.standalone.navigation.start().to_path_buf();
+        let standalone_prev = self.standalone.navigation.current().to_path_buf();
+        self.standalone.navigation = Navigation::new(path.clone());
+        if self.standalone.navigation.current() != standalone_prev {
+            self.standalone.top_item = 0;
+        }
+        if let Some(tabs) = &mut self.tabs {
+            for tab in &mut tabs.views {
+                let untouched_at_old_default = tab.navigation.current() == old_default
+                    && tab.navigation.back_history().is_empty()
+                    && tab.navigation.forward_history().is_empty()
+                    && tab.navigation.scope().kind() == crate::domain::ScopeKind::Free;
+                if untouched_at_old_default {
+                    let prev_current = tab.navigation.current().to_path_buf();
+                    tab.navigation = Navigation::new(path.clone());
+                    if tab.navigation.current() != prev_current {
+                        tab.top_item = 0;
+                    }
+                } else {
+                    tab.navigation.set_default_start(path.clone());
+                }
+            }
+        }
+    }
     pub fn active_view(&self) -> &FolderView {
         match self.tabs.as_ref().filter(|tabs| tabs.visible) {
             Some(tabs) => tabs.active_view(),
@@ -92,6 +147,7 @@ impl FolderBox {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabCommand {
     Visible(bool),
+    LeftPanel(super::LeftPanel),
     Add,
     Activate(ViewId),
     Close(ViewId),
@@ -99,10 +155,13 @@ pub enum TabCommand {
 }
 
 impl Workspace {
+    pub fn box_for_view(&self, view: ViewId) -> Option<&FolderBox> {
+        self.boxes.iter().find(|item| item.view(view).is_some())
+    }
     pub fn can_change_tabs(&self, id: BoxId, command: TabCommand) -> bool {
         self.boxes.iter().any(|item| item.id == id)
             && match command {
-                TabCommand::Visible(_) => self.configuring(id),
+                TabCommand::Visible(_) | TabCommand::LeftPanel(_) => self.configuring(id),
                 TabCommand::Reorder { .. } => self.mode == Mode::Layout,
                 _ => self.mode == Mode::Browse || self.configuring(id),
             }
@@ -131,26 +190,10 @@ impl Workspace {
         let mut identity = self.next_identity;
         let changed = match command {
             TabCommand::Visible(visible) => {
-                if let Some(tabs) = &mut item.tabs {
-                    if tabs.visible == visible {
-                        false
-                    } else {
-                        tabs.visible = visible;
-                        true
-                    }
-                } else if visible {
-                    self.admit_view(&mut identity)?;
-                    let mut view = item.standalone.clone();
-                    view.view = ViewId(identity);
-                    item.tabs = Some(Tabs {
-                        views: vec![view],
-                        active: 0,
-                        visible: true,
-                    });
-                    true
-                } else {
-                    false
-                }
+                self.apply_tab_visibility(&mut item, visible, &mut identity)?
+            }
+            TabCommand::LeftPanel(panel) => {
+                self.apply_left_panel(&mut item, panel, &mut identity)?
             }
             other => Self::change_tab(&mut item, other, &mut identity, self.all_views().count())?,
         };
@@ -161,6 +204,80 @@ impl Workspace {
         proposal.boxes[index] = item;
         proposal.next_identity = identity;
         Ok(Some(proposal))
+    }
+
+    fn apply_tab_visibility(
+        &self,
+        item: &mut FolderBox,
+        visible: bool,
+        identity: &mut u64,
+    ) -> Result<bool, &'static str> {
+        let mut changed = if let Some(tabs) = &mut item.tabs {
+            if tabs.visible == visible {
+                false
+            } else {
+                tabs.visible = visible;
+                true
+            }
+        } else if visible {
+            self.admit_view(identity)?;
+            let mut view = item.standalone.clone();
+            view.view = ViewId(*identity);
+            item.tabs = Some(Tabs {
+                views: vec![view],
+                active: 0,
+                visible: true,
+            });
+            true
+        } else {
+            false
+        };
+        if visible && item.settings.sidebar {
+            item.settings.sidebar = false;
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    fn apply_left_panel(
+        &self,
+        item: &mut FolderBox,
+        panel: super::LeftPanel,
+        identity: &mut u64,
+    ) -> Result<bool, &'static str> {
+        if item.left_panel() == panel {
+            return Ok(false);
+        }
+        match panel {
+            super::LeftPanel::None => {
+                item.settings.sidebar = false;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = false;
+                }
+            }
+            super::LeftPanel::Sidebar => {
+                item.settings.sidebar = true;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = false;
+                }
+            }
+            super::LeftPanel::VerticalTabs => {
+                item.settings.sidebar = false;
+                if let Some(tabs) = &mut item.tabs {
+                    tabs.visible = true;
+                } else {
+                    self.admit_view(identity)?;
+                    let mut view = item.standalone.clone();
+                    view.view = ViewId(*identity);
+                    item.tabs = Some(Tabs {
+                        views: vec![view],
+                        active: 0,
+                        visible: true,
+                    });
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn admit_view(&self, identity: &mut u64) -> Result<(), &'static str> {
@@ -179,6 +296,7 @@ impl Workspace {
         identity: &mut u64,
         count: usize,
     ) -> Result<bool, &'static str> {
+        let default_start = item.standalone.navigation.start().to_path_buf();
         let tabs = item
             .tabs
             .as_mut()
@@ -195,13 +313,9 @@ impl Workspace {
                 *identity = identity
                     .checked_add(1)
                     .ok_or("view identities are exhausted")?;
-                let navigation =
-                    Navigation::new(tabs.active_view().navigation.current().to_path_buf())
-                        .with_scope(tabs.active_view().navigation.scope().clone());
-                tabs.views.push(FolderView {
-                    view: ViewId(*identity),
-                    navigation,
-                });
+                let navigation = Navigation::new(default_start);
+                tabs.views
+                    .push(FolderView::new(ViewId(*identity), navigation));
                 tabs.active = tabs.views.len() - 1;
                 Ok(true)
             }
@@ -260,13 +374,14 @@ impl Workspace {
                     .ok_or("active tab is missing")?;
                 Ok(true)
             }
-            TabCommand::Visible(_) => Err("invalid tab command"),
+            TabCommand::Visible(_) | TabCommand::LeftPanel(_) => Err("invalid tab command"),
         }
     }
 
     /// Only the application may accept a current, budget-checked proposal.
-    pub(crate) fn accept_tab_proposal(&mut self, proposal: Self) {
+    pub(crate) fn accept_tab_proposal(&mut self, mut proposal: Self) {
         self.remember();
+        super::scroll::carry_proposal_scroll(&self.boxes, &mut proposal.boxes);
         self.boxes = proposal.boxes;
         self.next_identity = proposal.next_identity;
         self.gesture = None;

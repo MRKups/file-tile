@@ -8,7 +8,7 @@ use crate::domain::FolderBox;
 
 use crate::{
     Message, ViewPresentation, boxes::file_list, boxes::folder_status, boxes::navigation_header,
-    boxes::tab_rail, canvas::geometry::CanvasGeometry, widgets::retained_view,
+    boxes::sidebar, boxes::tab_rail, canvas::geometry::CanvasGeometry, widgets::retained_view,
     window::appearance as a,
 };
 
@@ -44,9 +44,16 @@ pub struct Props<'a> {
     pub tab_error: Option<&'a str>,
     pub opening_status: Option<&'a str>,
     pub dragged_tab: Option<crate::domain::ViewId>,
+    pub pinned_folders: &'a [std::path::PathBuf],
+    pub ungranted_pins: &'a std::collections::BTreeSet<std::path::PathBuf>,
+    pub locations: &'a [crate::platform::volumes::DetectedLocation],
+    pub ejecting: &'a std::collections::BTreeSet<std::path::PathBuf>,
+    pub safety_policy: crate::domain::SafetyPolicy,
+    pub dragged_pin: Option<usize>,
     pub sort_open: bool,
     pub dragging: Option<&'a std::collections::HashSet<std::path::PathBuf>>,
     pub column_preview: Option<&'a crate::boxes::file_columns::ViewPreview>,
+    pub capabilities: crate::domain::CapabilityPreferences,
 }
 
 /// Normal boxes pin header/status and scroll only entries. Tiny boxes scroll the
@@ -59,6 +66,65 @@ pub(crate) fn is_compact(
 ) -> bool {
     let header = navigation_header::height(width, settings, ty);
     height < header + ty.row(34.0) * 2.0
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScrollerGeometry {
+    pub compact: bool,
+    pub content_width: f32,
+    pub nav_height: f32,
+    pub footer_height: f32,
+    pub viewport_height: f32,
+    pub two_columns: bool,
+}
+
+pub(crate) fn scroller_geometry(
+    geometry: CanvasGeometry,
+    item: &crate::domain::FolderBox,
+) -> ScrollerGeometry {
+    scroller_geometry_with_settings(geometry, item, item.settings)
+}
+
+pub(crate) fn scroller_geometry_with_settings(
+    geometry: CanvasGeometry,
+    item: &crate::domain::FolderBox,
+    settings: crate::domain::BoxSettings,
+) -> ScrollerGeometry {
+    let ty = geometry.typography;
+    let box_rect = geometry.rect(item.rect);
+    let rail_width = sidebar::left_rail_width(item, settings, box_rect.width);
+    let pane_width = (box_rect.width - rail_width).max(1.0);
+    let pane_height = box_rect.height;
+    let compact = is_compact(pane_width, pane_height, settings, ty)
+        || pane_width < navigation_header::minimum_width(settings);
+    let content_width = if compact {
+        pane_width.max(navigation_header::minimum_width(settings))
+    } else {
+        pane_width
+    };
+    let nav_height = navigation_header::height(content_width, settings, ty);
+    let footer_height = folder_status::height(ty);
+    let is_columns = !compact && settings.file_view == crate::domain::FileView::Columns;
+    let two_columns =
+        is_columns && content_width > crate::boxes::file_columns::TWO_COLUMN_MIN_WIDTH;
+    let col_header = if is_columns {
+        crate::boxes::file_columns::header_height(ty)
+    } else {
+        0.0
+    };
+    let viewport_height = if compact {
+        pane_height
+    } else {
+        (pane_height - nav_height - footer_height - col_header).max(0.0)
+    };
+    ScrollerGeometry {
+        compact,
+        content_width,
+        nav_height,
+        footer_height,
+        viewport_height,
+        two_columns,
+    }
 }
 
 pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
@@ -74,7 +140,7 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
     let window_palette = props.window_palette;
     let active = props.item.active_view();
     let box_rect = props.geometry.rect(props.item.rect);
-    let rail_width = tab_rail::width(props.item, box_rect.width);
+    let rail_width = sidebar::rail_width(props.item, box_rect.width);
     let rect = Rectangle {
         x: box_rect.x + rail_width,
         width: (box_rect.width - rail_width).max(1.0),
@@ -113,8 +179,9 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
         props.conflict_name,
         props.files_closing,
         palette,
-        box_rect.height,
+        box_rect.size(),
     );
+    let outside_press = crate::menus::file_prompt::outside_press(active.view, props.presentation);
     let box_seed = props.item.id.0;
     let mut layers = Stack::new();
     if let Some(texture) = a::surface_texture::overlay(palette, box_seed) {
@@ -131,6 +198,7 @@ pub fn view(mut props: Props<'_>) -> Element<'_, Message> {
         );
         layers = layers.push(crate::menus::file_prompt::anchored(
             props.presentation.and_then(|state| state.prompt_anchor),
+            outside_press,
             prompt,
         ));
     }
@@ -160,7 +228,7 @@ fn with_tab_rail<'a>(
     width: f32,
     body: Element<'a, Message>,
 ) -> Element<'a, Message> {
-    let rail: Element<'a, Message> = if width > 0.0 {
+    let rail: Element<'a, Message> = if width > 0.0 && props.item.has_visible_tabs() {
         tab_rail::view(tab_rail::Props {
             palette: props.palette,
             item: props.item,
@@ -170,6 +238,21 @@ fn with_tab_rail<'a>(
             width,
             dragged: props.dragged_tab,
         })
+    } else if width > 0.0 && props.item.has_sidebar() {
+        sidebar::view(sidebar::Props {
+            palette: props.palette,
+            item: props.item,
+            home: props.home,
+            pinned: props.pinned_folders,
+            ungranted_pins: props.ungranted_pins,
+            locations: props.locations,
+            ejecting: props.ejecting,
+            safety_policy: props.safety_policy.clone(),
+            mode: props.mode,
+            interactive: props.tabs_input,
+            width,
+            dragged_pin: props.dragged_pin,
+        })
     } else {
         space().width(0).into()
     };
@@ -178,18 +261,19 @@ fn with_tab_rail<'a>(
 }
 
 fn status<'a>(props: &Props<'a>) -> Element<'a, Message> {
-    folder_status::view(
-        props.load,
-        props
+    folder_status::view(folder_status::Props {
+        load: props.load,
+        hint: props
             .tab_error
             .or(props.opening_status)
             .or_else(|| props.presentation.and_then(|state| state.hint.as_deref())),
-        props.watch,
-        props.item.settings.show_hidden,
-        props.palette,
-        props.sort_status,
-        props.usage,
-    )
+        watch: props.watch,
+        show_hidden: props.item.settings.show_hidden,
+        palette: props.palette,
+        sort_status: props.sort_status,
+        usage: props.usage,
+        capabilities: props.capabilities,
+    })
 }
 
 fn contents<'a>(
@@ -248,7 +332,7 @@ fn contents<'a>(
         dragging: props.dragging,
         column_preview: props.column_preview,
     };
-    let footer = status(props);
+    let footer = crate::menus::folder_menu::target(active.view, props.interactive, status(props));
     if compact {
         compact_contents(
             props,
@@ -307,7 +391,12 @@ fn compact_contents<'a>(
     .width(Fill)
     .height(Fill)
     .on_scroll(move |viewport| {
-        Message::FileViewportScrolled(view, viewport.absolute_offset(), viewport.bounds().height)
+        Message::FileViewportScrolled(
+            view,
+            viewport.absolute_offset(),
+            viewport.bounds().height,
+            viewport.is_user_scroll(),
+        )
     })
     .into()
 }
@@ -339,11 +428,6 @@ fn file_window(
     let height = (bottom.min(props.geometry.offset.y + props.geometry.viewport.height)
         - top.max(props.geometry.offset.y))
     .max(0.0);
-    let height = if scroll.height > 0.0 {
-        height.min(scroll.height)
-    } else {
-        height
-    };
     let offset = scroll.offset + clipped_top;
     file_list::ScrollWindow {
         offset: if compact {

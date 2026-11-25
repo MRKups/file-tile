@@ -8,12 +8,18 @@ use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vect
 
 struct Placement<'a> {
     anchor: Point,
+    outside_press: Option<Message>,
     content: Element<'a, Message>,
 }
 
-pub(crate) fn view(anchor: Option<Point>, content: Element<'_, Message>) -> Element<'_, Message> {
+pub(crate) fn view(
+    anchor: Option<Point>,
+    outside_press: Option<Message>,
+    content: Element<'_, Message>,
+) -> Element<'_, Message> {
     Element::new(Placement {
         anchor: anchor.unwrap_or(Point::ORIGIN),
+        outside_press,
         content,
     })
 }
@@ -66,9 +72,17 @@ impl Widget<Message, Theme, Renderer> for Placement<'_> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        let pressed = matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_)));
+        let inside = cursor.is_over(layout.bounds());
         self.content.as_widget_mut().update(
             tree, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
+        if pressed
+            && !inside
+            && let Some(message) = &self.outside_press
+        {
+            shell.publish(message.clone());
+        }
     }
     fn draw(
         &self,

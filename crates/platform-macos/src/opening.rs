@@ -70,7 +70,7 @@ pub fn open_directory(path: &Path, is_cancelled: impl Fn() -> bool) -> Result<()
         });
     }
     if !path.is_absolute()
-        || !std::fs::symlink_metadata(path)
+        || !std::fs::metadata(path)
             .map_err(|error| {
                 OpenError::io(
                     &error,
@@ -82,8 +82,8 @@ pub fn open_directory(path: &Path, is_cancelled: impl Fn() -> bool) -> Result<()
             .is_dir()
     {
         return Err(OpenError::safe(
-            "Cannot open diagnostic logs: the logs folder is missing or is not a directory. Check the displayed path before retrying.".into(),
-            "The logs folder is missing or is not a directory. Check the Diagnostic Logs path, then retry.",
+            "Cannot open folder externally: the folder is missing or is not a directory. Check the displayed path before retrying.".into(),
+            "The target folder is missing or is not a directory. Check the path, then retry.",
         ));
     }
     handoff(path.as_os_str(), &is_cancelled)

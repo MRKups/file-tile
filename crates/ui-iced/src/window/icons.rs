@@ -1,5 +1,6 @@
 //! Embedded UI vector icons.
 
+use std::path::Path;
 use std::sync::OnceLock;
 
 use iced::Color;
@@ -31,15 +32,27 @@ pub enum Icon {
     Trash,
     Wrench,
     Github,
+    Scissors,
+    Info,
+    Cloud,
+    Drive,
+    Network,
+    Pin,
+    Lock,
+    Eject,
+    Search,
 }
 
 impl Icon {
     pub fn for_entry(entry: &DirectoryEntry) -> Self {
-        if entry.kind == EntryKind::Directory {
+        Self::for_path_kind(&entry.path, entry.kind)
+    }
+
+    pub fn for_path_kind(path: &Path, kind: EntryKind) -> Self {
+        if kind == EntryKind::Directory {
             return Self::Folder;
         }
-        let image = entry
-            .path
+        let image = path
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| {
@@ -47,7 +60,7 @@ impl Icon {
                     .iter()
                     .any(|image| extension.eq_ignore_ascii_case(image))
             });
-        if entry.kind == EntryKind::File && image {
+        if kind == EntryKind::File && image {
             Self::Image
         } else {
             Self::Document
@@ -78,11 +91,20 @@ impl Icon {
             Self::Trash => include_bytes!("../../../../assets/icons/ui/trash.svg"),
             Self::Wrench => include_bytes!("../../../../assets/icons/ui/wrench.svg"),
             Self::Github => include_bytes!("../../../../assets/icons/ui/github.svg"),
+            Self::Scissors => include_bytes!("../../../../assets/icons/ui/scissors.svg"),
+            Self::Info => include_bytes!("../../../../assets/icons/ui/info.svg"),
+            Self::Cloud => include_bytes!("../../../../assets/icons/ui/cloud.svg"),
+            Self::Drive => include_bytes!("../../../../assets/icons/ui/drive.svg"),
+            Self::Network => include_bytes!("../../../../assets/icons/ui/network.svg"),
+            Self::Pin => include_bytes!("../../../../assets/icons/ui/pin.svg"),
+            Self::Lock => include_bytes!("../../../../assets/icons/ui/lock.svg"),
+            Self::Eject => include_bytes!("../../../../assets/icons/ui/eject.svg"),
+            Self::Search => include_bytes!("../../../../assets/icons/ui/search.svg"),
         }
     }
 
     fn handle(self) -> Handle {
-        static HANDLES: OnceLock<[Handle; 22]> = OnceLock::new();
+        static HANDLES: OnceLock<[Handle; 31]> = OnceLock::new();
         HANDLES.get_or_init(|| {
             [
                 Self::Eye,
@@ -107,6 +129,15 @@ impl Icon {
                 Self::Trash,
                 Self::Wrench,
                 Self::Github,
+                Self::Scissors,
+                Self::Info,
+                Self::Cloud,
+                Self::Drive,
+                Self::Network,
+                Self::Pin,
+                Self::Lock,
+                Self::Eject,
+                Self::Search,
             ]
             .map(|icon| Handle::from_memory(icon.bytes()))
         })[self as usize]

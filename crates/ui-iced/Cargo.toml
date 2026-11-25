@@ -1,16 +1,16 @@
 [package]
 name = "file-tile-ui-iced"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.99"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 publish = false
-license = "MIT"
-authors = ["Michał Kupś"]
-repository = "https://github.com/MRKups/file-tile"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Iced desktop UI, widgets, dialogs, and runtime adapter for file-tile"
 
 [dependencies]
-file-tile-core = { path = "../core", version = "=0.1.0" }
+file-tile-core.workspace = true
 iced = { version = "=0.14.0", default-features = false, features = [
     "advanced",
     "advanced-shaping",

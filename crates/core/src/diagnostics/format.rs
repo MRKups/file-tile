@@ -48,6 +48,7 @@ impl Event {
             Subsystem::Storage => "configuration-storage",
             Subsystem::Files => "file-operation",
             Subsystem::Opening => "file-opening",
+            Subsystem::Search => "search",
         };
         let mut line = format!(
             "{} {severity:<5} {component} - {text} pid={} elapsed_ms={}",
@@ -105,12 +106,10 @@ pub(super) fn severity(
         | Outcome::Busy
         | Outcome::Unavailable
         | Outcome::TimedOut
-        | Outcome::InvalidOutput
         | Outcome::RecoveryOnly
         | Outcome::ExternalChange
         | Outcome::ReadOnly
         | Outcome::BackupAvailable
-        | Outcome::OutputLimit
         | Outcome::NotFound
         | Outcome::NotDirectory
         | Outcome::PermissionDenied => Some("WARN"),

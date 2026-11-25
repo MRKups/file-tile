@@ -58,12 +58,40 @@ pub fn can_drag(point: Point, width: f32, height: f32, mode: Mode) -> bool {
     }
 }
 
+/// Empty Browse-mode header band between macOS traffic lights and the top-right toolbar.
+/// Uses symmetric margins around window center when roomy, falling back to the full
+/// available gap on narrower windows so it never overlaps traffic lights or toolbar.
+pub fn center_slot(width: f32) -> Rectangle {
+    let left_min = TRAFFIC_LIGHTS + 12.0;
+    let right_reserve = CORNER_INSET + toolbar::WIDTH + 12.0;
+    let max_right = (width - right_reserve).max(left_min);
+    let symmetric_width = (width - 2.0 * right_reserve).max(0.0);
+    let (x, slot_width) = if symmetric_width >= 380.0 {
+        (right_reserve, symmetric_width)
+    } else {
+        (left_min, (max_right - left_min).max(0.0))
+    };
+    Rectangle {
+        x,
+        y: CORNER_INSET,
+        width: slot_width,
+        height: icon_button::TOOL_TARGET,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Controls {
+    pub search_enabled: bool,
+    pub search_open: bool,
+    pub workspace_enabled: bool,
+    pub settings_enabled: bool,
+}
+
 pub fn view(
     application: &Application,
     width: f32,
     height: f32,
-    workspace_enabled: bool,
-    settings_enabled: bool,
+    controls: Controls,
     palette: a::Palette,
 ) -> Element<'_, Message> {
     let mode = application.workspace().mode();
@@ -73,24 +101,28 @@ pub fn view(
         workspace_tools(
             application,
             width,
-            workspace_enabled,
-            settings_enabled,
+            controls.workspace_enabled,
+            controls.settings_enabled,
             palette,
         )
     };
     let row_height = icon_button::TOOL_TARGET;
-    let recovery = application.can_retry_startup() && workspace_enabled;
+    let recovery = application.can_retry_startup() && controls.workspace_enabled;
     let controls = container(
         row![
             space().width(TRAFFIC_LIGHTS),
             tools,
             space().width(Fill),
             toolbar::view(
-                mode,
-                workspace_enabled,
-                settings_enabled,
-                application.save_failed() || application.can_retry_startup(),
-                recovery,
+                toolbar::State {
+                    active: mode,
+                    search_enabled: controls.search_enabled,
+                    search_open: controls.search_open,
+                    workspace_enabled: controls.workspace_enabled,
+                    settings_enabled: controls.settings_enabled,
+                    storage_attention: application.save_failed() || application.can_retry_startup(),
+                    recovery_enabled: recovery,
+                },
                 palette
             ),
         ]

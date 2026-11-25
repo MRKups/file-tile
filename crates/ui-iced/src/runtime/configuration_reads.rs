@@ -21,6 +21,7 @@ impl Desktop {
         request: ListingRequest,
         resolve: bool,
     ) -> Task<Message> {
+        let safety = self.application.safety_policy(Some(request.view));
         match &self.directory {
             #[cfg(test)]
             DirectoryBackend::Controlled(reader) => {
@@ -36,7 +37,12 @@ impl Desktop {
                             )
                         })
                 } else {
-                    reader.list(&request.directory)
+                    reader.list_permitted(
+                        &request.directory,
+                        &crate::domain::Scope::default(),
+                        &safety,
+                        &Cancellation::default(),
+                    )
                 };
                 let completion = ListingCompletion { request, result };
                 Task::done(Message::Action(if resolve {
@@ -49,7 +55,11 @@ impl Desktop {
                 let future = if resolve {
                     workers.resolve(request.clone())
                 } else {
-                    workers.submit(request.clone())
+                    workers.submit_permitted(
+                        request.clone(),
+                        crate::domain::Scope::default(),
+                        safety,
+                    )
                 };
                 let cancellation = future.cancellation();
                 let (task, handle) = Task::perform(future, move |completion| {

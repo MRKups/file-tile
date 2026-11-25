@@ -3,10 +3,15 @@ use crate::application::{
     Action,
     files::file_operations::{ConflictChoice, Item, Operation, Phase},
 };
-use crate::domain::ViewId;
-use crate::{Message, menus::file_actions, widgets::focus_control, window::appearance as a};
+use crate::domain::{ViewId, files::CreateKind};
+use crate::{
+    Message, dialogs::app_settings::style as field_style, menus::file_actions,
+    widgets::focus_control, window::appearance as a, window::icons,
+};
 use iced::Element;
-use iced::widget::{button, column, container, row, scrollable, text_input};
+use iced::widget::{
+    button, column, container, opaque, rich_text, row, scrollable, span, text_input,
+};
 
 pub(crate) const PANEL_ID: &str = "box-file-prompt";
 pub(crate) const BLOCK_ID: &str = "box-file-input-shield";
@@ -25,6 +30,21 @@ pub(crate) fn position(
     )
 }
 
+pub(crate) fn outside_press(
+    view: ViewId,
+    presentation: Option<&crate::ViewPresentation>,
+) -> Option<Message> {
+    let state = presentation?;
+    if let Some(draft) = &state.name_draft {
+        Some(Message::CancelName(view, draft.generation))
+    } else {
+        state
+            .trash_draft
+            .as_ref()
+            .map(|draft| Message::TrashPrompt(view, draft.generation, false))
+    }
+}
+
 pub(crate) fn view<'a>(
     view: ViewId,
     presentation: Option<&'a crate::ViewPresentation>,
@@ -32,71 +52,33 @@ pub(crate) fn view<'a>(
     conflict_name: Option<&'a str>,
     closing: bool,
     palette: a::Palette,
-    available_height: f32,
+    available_size: iced::Size,
 ) -> Option<Element<'a, Message>> {
-    let ty = palette.typography;
-    let content = if let Some(draft) = presentation.and_then(|s| s.name_draft.as_ref()) {
-        name_content(view, draft, palette)
-    } else if let Some(trash) = presentation.and_then(|s| s.trash_draft.as_ref()) {
-        trash_content(view, trash, palette)
-    } else {
-        let operation = operation?;
-        let id = operation.id;
-        match &operation.phase {
-            Phase::Running(job) => {
-                let content = column![
-                    ty.text(if closing {
-                        "Finishing before Quit…"
-                    } else {
-                        match job.item {
-                            Item::Copy(_) => "Copying…",
-                            Item::Move(_) => "Moving…",
-                            Item::Create(_) => "Creating…",
-                            Item::Rename(_) => "Renaming…",
-                            Item::Trash(_) => "Moving to Trash…",
-                        }
-                    })
-                    .font(ty.heading_font()),
-                    ty.text(job.name.clone())
-                        .wrapping(iced::widget::text::Wrapping::None),
-                    ty.caption(if matches!(job.item, Item::Trash(_)) {
-                        format!("From: {}", job.directory.display())
-                    } else {
-                        format!("To: {}", job.directory.display())
-                    })
-                    .wrapping(iced::widget::text::Wrapping::None),
-                    ty.caption(format!(
-                        "{} completed · {} skipped · {} total",
-                        operation.completed, operation.skipped, operation.total
-                    )),
-                    ty.caption("Cannot interrupt the active item."),
-                ]
-                .spacing(6);
-                if closing {
-                    content.push(control(
-                        "file-cancel-quit",
-                        "Cancel Quit",
-                        Message::Action(Action::CancelClose),
-                        palette,
-                    ))
-                } else if operation.stopped {
-                    content.push(ty.small("Stopping after this item…"))
-                } else {
-                    content.push(control(
-                        "file-stop",
-                        "Stop after this item",
-                        Message::Action(Action::StopFileOperation(id)),
-                        palette,
-                    ))
-                }
+    let content: Element<'a, Message> =
+        if let Some(draft) = presentation.and_then(|s| s.name_draft.as_ref()) {
+            name_content(view, draft, palette)
+        } else if let Some(trash) = presentation.and_then(|s| s.trash_draft.as_ref()) {
+            trash_content(view, trash, palette)
+        } else {
+            let operation = operation?;
+            match &operation.phase {
+                Phase::Running(job) => running_content(operation, job, closing, palette),
+                Phase::Conflict(job) => conflict_content(operation.id, job, conflict_name, palette),
+                Phase::Finished => finished_content(operation, palette),
             }
-            Phase::Conflict(job) => conflict_content(id, job, conflict_name, palette),
-            Phase::Finished => finished_content(operation, palette),
-        }
+        };
+    let card_width = (available_size.width - 24.0).clamp(220.0, 320.0);
+    let max_width = 340.0;
+    let max_height = available_size.height.clamp(1.0, 220.0);
+    let padding = iced::Padding {
+        top: 14.0,
+        right: 16.0,
+        bottom: 14.0,
+        left: 16.0,
     };
-    Some(
+    Some(opaque(
         container(
-            a::scroll_area(container(content).width(220).padding(8))
+            a::scroll_area(container(content).width(card_width).padding(padding))
                 .style(palette.scrollable())
                 .direction(scrollable::Direction::Both {
                     vertical: a::scrollbar(),
@@ -105,26 +87,139 @@ pub(crate) fn view<'a>(
         )
         .id(PANEL_ID)
         .width(iced::Shrink)
-        .max_width(300)
-        .max_height(available_height.clamp(1.0, 180.0))
+        .max_width(max_width)
+        .max_height(max_height)
         .style(move |_| container::Style {
             background: Some(palette.contrast_background.into()),
             text_color: Some(palette.text),
             border: iced::Border {
                 color: palette.border,
                 width: 1.0,
-                radius: 8.0.into(),
+                radius: 10.0.into(),
+            },
+            shadow: iced::Shadow {
+                color: iced::Color::BLACK.scale_alpha(0.24),
+                offset: iced::Vector::new(0.0, 6.0),
+                blur_radius: 18.0,
             },
             ..Default::default()
-        })
-        .into(),
-    )
+        }),
+    ))
 }
 
-fn finished_content<'a>(
-    operation: &'a Operation,
+fn with_icon<'a>(
+    icon: icons::Icon,
+    body: impl Into<Element<'a, Message>>,
     palette: a::Palette,
-) -> iced::widget::Column<'a, Message> {
+) -> Element<'a, Message> {
+    row![
+        container(icons::view(icon, 20.0, Some(palette.muted), 1.0)).padding(iced::Padding {
+            top: 2.0,
+            ..iced::Padding::ZERO
+        }),
+        body.into(),
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Start)
+    .into()
+}
+
+fn emphasized_heading<'a>(
+    prefix: &'a str,
+    target: impl iced::advanced::text::IntoFragment<'a>,
+    suffix: &'a str,
+    palette: a::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
+    rich_text![
+        span(prefix).color(palette.text),
+        span(target).color(palette.accent),
+        span(suffix).color(palette.text),
+    ]
+    .on_link_click(iced::never)
+    .font(ty.heading_font())
+    .size(ty.size(crate::window::typography::BODY_SIZE))
+    .into()
+}
+
+fn item_icon(item: &Item) -> icons::Icon {
+    match item {
+        Item::Copy(_) => icons::Icon::Copy,
+        Item::Move(_) => icons::Icon::Move,
+        Item::Create(CreateKind::Folder) => icons::Icon::Folder,
+        Item::Create(_) => icons::Icon::Document,
+        Item::Rename(_) => icons::Icon::Rename,
+        Item::Trash(_) => icons::Icon::Trash,
+    }
+}
+
+fn running_content<'a>(
+    operation: &'a Operation,
+    job: &'a crate::application::files::file_operations::Job,
+    closing: bool,
+    palette: a::Palette,
+) -> Element<'a, Message> {
+    let ty = palette.typography;
+    let copy = column![
+        ty.text(if closing {
+            "Finishing before Quit…"
+        } else {
+            match job.item {
+                Item::Copy(_) => "Copying…",
+                Item::Move(_) => "Moving…",
+                Item::Create(_) => "Creating…",
+                Item::Rename(_) => "Renaming…",
+                Item::Trash(_) => "Moving to Trash…",
+            }
+        })
+        .font(ty.heading_font()),
+        ty.text(job.name.clone())
+            .color(palette.accent)
+            .wrapping(iced::widget::text::Wrapping::None),
+        rich_text![
+            span(if matches!(job.item, Item::Trash(_)) {
+                "From: "
+            } else {
+                "To: "
+            })
+            .color(palette.muted),
+            span(job.directory.display().to_string()).color(palette.text),
+        ]
+        .on_link_click(iced::never)
+        .font(ty.font())
+        .size(ty.size(crate::window::typography::CAPTION_SIZE))
+        .wrapping(iced::widget::text::Wrapping::None),
+        ty.caption(format!(
+            "{} completed · {} skipped · {} total",
+            operation.completed, operation.skipped, operation.total
+        ))
+        .color(palette.muted),
+    ]
+    .spacing(4);
+    let action: Element<'a, Message> = if closing {
+        control(
+            "file-cancel-quit",
+            "Cancel Quit",
+            Message::Action(Action::CancelClose),
+            palette,
+        )
+    } else if operation.stopped {
+        ty.small("Stopping after this item…")
+            .color(palette.muted)
+            .into()
+    } else {
+        control(
+            "file-stop",
+            "Stop after this item",
+            Message::Action(Action::StopFileOperation(operation.id)),
+            palette,
+        )
+    };
+    let body = column![copy, action].spacing(12).width(iced::Fill);
+    with_icon(item_icon(&job.item), body, palette)
+}
+
+fn finished_content<'a>(operation: &'a Operation, palette: a::Palette) -> Element<'a, Message> {
     use crate::application::files::file_operations::ItemStatus;
     let ty = palette.typography;
     let failed = operation
@@ -137,46 +232,83 @@ fn finished_content<'a>(
         .iter()
         .filter(|item| item.status == ItemStatus::Cancelled)
         .count();
-    let mut content = column![ty.text(format!(
-        "{} completed · {} skipped\n{failed} failed · {cancelled} cancelled",
-        operation.completed, operation.skipped
-    ))]
-    .spacing(6);
+    let mut copy = column![
+        ty.text(format!(
+            "{} completed · {} skipped\n{failed} failed · {cancelled} cancelled",
+            operation.completed, operation.skipped
+        ))
+        .font(ty.heading_font())
+    ]
+    .spacing(4);
     if cancelled > 0 {
-        content = content.push(
+        copy = copy.push(
             ty.caption("Completed items were not reversed.")
                 .color(palette.muted),
         );
     }
     if let Some(error) = &operation.error {
-        content = content.push(ty.caption(error).color(palette.error));
+        copy = copy.push(ty.caption(error).color(palette.error));
     }
-    content.push(control(
-        "file-operation-done",
-        "Done",
-        Message::Action(Action::DismissFileOperation(operation.id)),
-        palette,
-    ))
+    let body = column![
+        copy,
+        primary_control(
+            "file-operation-done",
+            "Done",
+            Message::Action(Action::DismissFileOperation(operation.id)),
+            palette,
+        )
+    ]
+    .spacing(12)
+    .width(iced::Fill);
+    with_icon(icons::Icon::Info, body, palette)
 }
 
 fn name_content<'a>(
     view: ViewId,
     draft: &'a file_actions::NameDraft,
     palette: a::Palette,
-) -> iced::widget::Column<'a, Message> {
+) -> Element<'a, Message> {
     let ty = palette.typography;
     let generation = draft.generation;
+    let icon = match draft.purpose {
+        file_actions::NamePurpose::Rename(_) => icons::Icon::Rename,
+        file_actions::NamePurpose::Create(CreateKind::Folder) => icons::Icon::Folder,
+        file_actions::NamePurpose::Create(_) => icons::Icon::Document,
+    };
     let field = text_input("Filename", &draft.value)
         .id(file_actions::name_id(view))
         .font(ty.font())
         .size(ty.size(a::CONTROL_SIZE))
-        .padding(6)
+        .padding([7, 10])
         .on_input(move |value| Message::NameChanged(view, generation, value))
-        .on_submit(Message::SubmitName(view, generation));
-    let field = field.style(move |_, status| palette.path_field(status, draft.error.is_some()));
-    let mut content = column![
-        ty.text(draft.purpose.title()).font(ty.heading_font()),
-        field,
+        .on_submit(Message::SubmitName(view, generation))
+        .style(move |_, status| field_style::field(palette, status, draft.error.is_some()));
+    let heading = match &draft.purpose {
+        file_actions::NamePurpose::Rename(source) => match source.file_name() {
+            Some(name) => emphasized_heading(
+                "Rename “",
+                name.to_string_lossy().into_owned(),
+                "”",
+                palette,
+            ),
+            None => ty
+                .text(draft.purpose.title())
+                .font(ty.heading_font())
+                .color(palette.text)
+                .into(),
+        },
+        file_actions::NamePurpose::Create(_) => ty
+            .text(draft.purpose.title())
+            .font(ty.heading_font())
+            .color(palette.text)
+            .into(),
+    };
+    let mut copy = column![heading, field].spacing(8);
+    if let Some(error) = &draft.error {
+        copy = copy.push(ty.caption(error).color(palette.error));
+    }
+    let body = column![
+        copy,
         row![
             control(
                 "file-create-cancel",
@@ -184,38 +316,43 @@ fn name_content<'a>(
                 Message::CancelName(view, generation),
                 palette
             ),
-            control(
+            primary_control(
                 "file-create",
                 draft.purpose.action(),
                 Message::SubmitName(view, generation),
                 palette
             )
         ]
-        .spacing(4)
+        .spacing(8)
     ]
-    .spacing(6);
-    if let Some(error) = &draft.error {
-        content = content.push(ty.caption(error).color(palette.error));
-    }
-    content
+    .spacing(12)
+    .width(iced::Fill);
+    with_icon(icon, body, palette)
 }
 
 fn trash_content<'a>(
     view: ViewId,
     draft: &'a file_actions::TrashDraft,
     palette: a::Palette,
-) -> iced::widget::Column<'a, Message> {
+) -> Element<'a, Message> {
     let ty = palette.typography;
     let generation = draft.generation;
     let heading = if let [(_, name)] = draft.items.as_slice() {
-        format!("Move “{name}” to Trash?")
+        emphasized_heading("Move “", name.as_str(), "” to Trash?", palette)
     } else {
-        format!("Move {} items to Trash?", draft.items.len())
+        emphasized_heading(
+            "Move ",
+            format!("{} items", draft.items.len()),
+            " to Trash?",
+            palette,
+        )
     };
-    let mut content = column![
-        ty.text(heading).font(ty.heading_font()),
-        ty.caption("Items can be restored from the macOS Trash.")
-            .color(palette.muted),
+    let mut copy = column![heading].spacing(4);
+    if let Some(error) = &draft.error {
+        copy = copy.push(ty.caption(error).color(palette.error));
+    }
+    let body = column![
+        copy,
         row![
             control(
                 "file-trash-cancel",
@@ -223,20 +360,18 @@ fn trash_content<'a>(
                 Message::TrashPrompt(view, generation, false),
                 palette
             ),
-            control(
+            danger_control(
                 "file-trash-confirm",
                 "Move to Trash",
                 Message::TrashPrompt(view, generation, true),
                 palette
             )
         ]
-        .spacing(4)
+        .spacing(8)
     ]
-    .spacing(6);
-    if let Some(error) = &draft.error {
-        content = content.push(ty.caption(error).color(palette.error));
-    }
-    content
+    .spacing(12)
+    .width(iced::Fill);
+    with_icon(icons::Icon::Trash, body, palette)
 }
 
 fn conflict_content<'a>(
@@ -244,24 +379,29 @@ fn conflict_content<'a>(
     job: &'a crate::application::files::file_operations::Job,
     name: Option<&'a str>,
     palette: a::Palette,
-) -> iced::widget::Column<'a, Message> {
+) -> Element<'a, Message> {
     let ty = palette.typography;
     let step = job.step;
     let name = name.unwrap_or(&job.name);
+    let invalid = crate::domain::files::validate_name(name).is_err();
     let field = text_input("New filename", name)
         .id("file-conflict-name")
         .font(ty.font())
         .size(ty.size(a::CONTROL_SIZE))
-        .padding(6)
+        .padding([7, 10])
         .on_input(move |value| Message::ConflictNameChanged(id, step, value))
-        .on_submit(Message::KeepBoth(id, step));
-    let field = field.style(move |_, status| {
-        palette.path_field(status, crate::domain::files::validate_name(name).is_err())
-    });
-    let mut content = column![
-        ty.text(format!("“{}” already exists.", job.name))
-            .font(ty.heading_font()),
+        .on_submit(Message::KeepBoth(id, step))
+        .style(move |_, status| field_style::field(palette, status, invalid));
+    let mut copy = column![
+        emphasized_heading("“", job.name.as_str(), "” already exists.", palette),
         field,
+    ]
+    .spacing(8);
+    if let Err(error) = crate::domain::files::validate_name(name) {
+        copy = copy.push(ty.caption(error).color(palette.error));
+    }
+    let body = column![
+        copy,
         row![
             control(
                 "file-cancel",
@@ -279,7 +419,7 @@ fn conflict_content<'a>(
                 Message::Action(Action::ResolveFileConflict(id, step, ConflictChoice::Skip)),
                 palette
             ),
-            control(
+            primary_control(
                 "file-keep-both",
                 if matches!(
                     job.item,
@@ -293,14 +433,11 @@ fn conflict_content<'a>(
                 palette
             )
         ]
-        .spacing(4),
-        ty.caption("Existing entries will not be replaced.")
+        .spacing(8),
     ]
-    .spacing(6);
-    if let Err(error) = crate::domain::files::validate_name(name) {
-        content = content.push(ty.caption(error).color(palette.error));
-    }
-    content
+    .spacing(12)
+    .width(iced::Fill);
+    with_icon(item_icon(&job.item), body, palette)
 }
 
 fn control<'a>(
@@ -309,13 +446,89 @@ fn control<'a>(
     action: Message,
     palette: a::Palette,
 ) -> Element<'a, Message> {
-    focus_control::themed(
+    focus_control::themed_highlight_keys_radius(
         id,
         action.clone(),
-        button(palette.typography.small(label))
-            .padding([5, 8])
-            .style(move |_, status| palette.text_button(status))
+        button(palette.typography.control(label))
+            .padding([6, 12])
+            .style(move |_, status| palette.inspector_button(status, false))
             .on_press(action),
+        Vec::new(),
+        8.0.into(),
+        palette,
+    )
+}
+
+fn primary_control<'a>(
+    id: &'static str,
+    label: &'static str,
+    action: Message,
+    palette: a::Palette,
+) -> Element<'a, Message> {
+    focus_control::themed_highlight_keys_radius(
+        id,
+        action.clone(),
+        button(palette.typography.control(label))
+            .padding([6, 12])
+            .style(move |_, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: hovered.then_some(palette.tool_active.into()),
+                    text_color: if hovered {
+                        palette.accent
+                    } else {
+                        palette.text
+                    },
+                    border: iced::Border {
+                        color: if hovered {
+                            palette.accent
+                        } else {
+                            palette.border
+                        },
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            })
+            .on_press(action),
+        Vec::new(),
+        8.0.into(),
+        palette,
+    )
+}
+
+fn danger_control<'a>(
+    id: &'static str,
+    label: &'static str,
+    action: Message,
+    palette: a::Palette,
+) -> Element<'a, Message> {
+    focus_control::themed_highlight_keys_radius(
+        id,
+        action.clone(),
+        button(palette.typography.control(label))
+            .padding([6, 12])
+            .style(move |_, status| {
+                let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: hovered.then_some(palette.remove_fill.into()),
+                    text_color: if hovered { palette.error } else { palette.text },
+                    border: iced::Border {
+                        color: if hovered {
+                            palette.error
+                        } else {
+                            palette.border
+                        },
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..button::Style::default()
+                }
+            })
+            .on_press(action),
+        Vec::new(),
+        8.0.into(),
         palette,
     )
 }

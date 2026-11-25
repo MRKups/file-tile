@@ -93,11 +93,11 @@ impl Desktop {
                 presentation.invalid = false;
                 self.focus_version = self.focus_version.saturating_add(1);
                 self.focused_path = Some(view);
-                self.active_view = Some(view);
+                self.activate_view(view);
                 Task::none()
             }
             Message::PathSubmitted(view) => {
-                self.active_view = Some(view);
+                self.activate_view(view);
                 let command =
                     self.views
                         .get(&view)

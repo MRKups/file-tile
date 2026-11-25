@@ -59,7 +59,7 @@ pub fn prepare(
             continue;
         }
         let metadata = if matches!(settings.field, SortField::Modified | SortField::Size) {
-            reader.metadata(&entry.path, cancel).ok()
+            reader.sort_metadata(&entry.path, cancel).ok()
         } else {
             None
         };

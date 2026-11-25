@@ -16,7 +16,7 @@ pub(crate) struct Drag {
 
 impl Desktop {
     pub(crate) fn cancel_tab_drag_for(&mut self, action: &Action) -> bool {
-        if self.cancel_file_drag_for(action) {
+        if self.cancel_file_drag_for(action) || self.cancel_sidebar_drag_for(action) {
             return true;
         }
         if matches!(action, Action::Undo) && self.tab_drag.take().is_some() {

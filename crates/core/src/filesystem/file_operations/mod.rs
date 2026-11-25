@@ -70,7 +70,32 @@ impl Future for FileOperationFuture {
     }
 }
 
-fn execute(job: Job) -> Completion {
+fn canonicalize_best_effort(path: &Path) -> std::path::PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::new();
+    while let Some(name) = current.file_name() {
+        suffix.push(name.to_os_string());
+        if !current.pop() {
+            break;
+        }
+        if let Ok(mut canonical) = std::fs::canonicalize(&current) {
+            for part in suffix.into_iter().rev() {
+                canonical.push(part);
+            }
+            return canonical;
+        }
+    }
+    path.to_path_buf()
+}
+
+fn execute(mut job: Job) -> Completion {
+    job.safety.home = canonicalize_best_effort(&job.safety.home);
+    if let Some(state_dir) = &mut job.safety.state_dir {
+        *state_dir = canonicalize_best_effort(state_dir);
+    }
     let started = std::time::Instant::now();
     let activity = match job.item {
         Item::Copy(_) => Activity::Copy,
@@ -116,19 +141,15 @@ fn execute(job: Job) -> Completion {
     }
 }
 
-fn perform(
+fn inspect_destination(
     job: &Job,
     parent: &mut Option<Identity>,
-    rename_identity: &mut Option<Identity>,
-) -> Result<Outcome, Failure> {
-    validate_name(&job.name).map_err(|message| {
-        Failure::safe(
-            message,
-            "The proposed filename is invalid. Choose another name.",
-        )
-    })?;
+) -> Result<(std::fs::Metadata, std::path::PathBuf), Failure> {
     if !job.directory.is_absolute() {
         return Err("Cannot write to a relative destination. Reopen the folder.".into());
+    }
+    if !matches!(job.item, Item::Trash(_)) {
+        job.safety.check_write_directory(&job.directory)?;
     }
     let info = std::fs::symlink_metadata(&job.directory).map_err(|e| {
         Failure::io(
@@ -156,10 +177,48 @@ fn perform(
             "Destination folder was replaced during this batch. Inspect it before retrying.".into(),
         );
     }
+    Ok((info, canonical))
+}
+
+pub(super) fn check_mount_access(
+    safety: &crate::domain::SafetyPreferences,
+    path: &Path,
+) -> Result<(), &'static str> {
+    match crate::platform::volumes::classify_mount(path) {
+        crate::platform::volumes::VolumeMount::Local => Ok(()),
+        crate::platform::volumes::VolumeMount::External { .. } => {
+            if safety.external_drives_access {
+                Ok(())
+            } else {
+                Err("External drive access is turned off in Access and Safety settings.")
+            }
+        }
+        crate::platform::volumes::VolumeMount::Network { .. } => {
+            if safety.network_shares_access {
+                Ok(())
+            } else {
+                Err("Network share access is turned off in Access and Safety settings.")
+            }
+        }
+    }
+}
+
+fn perform(
+    job: &Job,
+    parent: &mut Option<Identity>,
+    rename_identity: &mut Option<Identity>,
+) -> Result<Outcome, Failure> {
+    validate_name(&job.name).map_err(|message| {
+        Failure::safe(
+            message,
+            "The proposed filename is invalid. Choose another name.",
+        )
+    })?;
+    let (info, canonical) = inspect_destination(job, parent)?;
+    check_mount_access(&job.safety.preferences, &canonical)?;
     if let Item::Trash(source) = &job.item {
         return trash(job, source, &info, &canonical);
     }
-    job.safety.check_write_directory(&job.directory)?;
     job.safety.check_write_directory(&canonical)?;
     let destination = job.directory.join(&job.name);
     if let Item::Rename(source) = &job.item {
@@ -181,7 +240,7 @@ fn perform(
         }
     }
     let source_info = match &job.item {
-        Item::Copy(source) => Some(inspect_copy_source(source, &canonical)?),
+        Item::Copy(source) => Some(inspect_copy_source(job, source, &canonical)?),
         Item::Create(_) | Item::Rename(_) | Item::Move(_) | Item::Trash(_) => None,
     };
     if identity(&std::fs::metadata(&job.directory).map_err(|e| Failure::io(&e, e.to_string()))?)
@@ -248,9 +307,28 @@ fn confirm_output(
     Ok(Outcome::Complete)
 }
 
-fn inspect_copy_source(source: &Path, destination: &Path) -> Result<std::fs::Metadata, Failure> {
+fn inspect_copy_source(
+    job: &Job,
+    source: &Path,
+    destination: &Path,
+) -> Result<std::fs::Metadata, Failure> {
     if !source.is_absolute() || source.to_str().is_none() {
         return Err("Cannot use this native path exactly. Use Finder for this entry.".into());
+    }
+    job.safety
+        .check_read_directory(source)
+        .map_err(Failure::from)?;
+    if let Some(parent) = source.parent() {
+        let canonical_parent = std::fs::canonicalize(parent).map_err(|e| {
+            Failure::io(
+                &e,
+                format!("Cannot resolve the source folder: {e}. Copy the source again."),
+            )
+        })?;
+        job.safety
+            .check_read_directory(&canonical_parent)
+            .map_err(Failure::from)?;
+        check_mount_access(&job.safety.preferences, &canonical_parent)?;
     }
     let info = std::fs::symlink_metadata(source).map_err(|e| {
         Failure::io(
@@ -271,6 +349,10 @@ fn inspect_copy_source(source: &Path, destination: &Path) -> Result<std::fs::Met
                 format!("Cannot resolve the source folder: {e}. Copy it again."),
             )
         })?;
+        job.safety
+            .check_read_directory(&source)
+            .map_err(Failure::from)?;
+        check_mount_access(&job.safety.preferences, &source)?;
         if destination.starts_with(&source) {
             return Err("Cannot put a folder inside itself. Choose another destination.".into());
         }

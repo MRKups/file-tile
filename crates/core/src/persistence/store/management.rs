@@ -116,6 +116,7 @@ impl Store {
             selected: None,
             source_saved: pending.source_saved,
             source_error: pending.source_error.clone(),
+            user_themes_notice: self.user_themes_notice.clone(),
             cancelled: true,
         })
     }
@@ -191,6 +192,7 @@ impl Store {
             selected: None,
             source_saved: true,
             source_error: None,
+            user_themes_notice: self.user_themes_notice.clone(),
             cancelled: false,
         })
     }
@@ -357,6 +359,7 @@ impl Store {
             })),
             source_saved: true,
             source_error: None,
+            user_themes_notice: self.user_themes_notice.clone(),
             cancelled: false,
         })
     }

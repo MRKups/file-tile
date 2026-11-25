@@ -5,6 +5,7 @@ use std::sync::Arc;
 use iced::Task;
 
 use crate::application::contracts::configuration::WorkspaceId;
+use crate::application::contracts::directory::Cancellation;
 use crate::application::contracts::storage::{
     SessionId, StartupOperation, StorageCompletion, StorageFailure,
 };
@@ -14,6 +15,42 @@ use crate::persistence::StorageWorker;
 use crate::{
     Desktop, DirectoryBackend, Message, runtime::launch::Launch, window::window_placement,
 };
+
+pub(crate) struct PendingLocations {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingLocations {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
+
+pub(crate) struct PendingSearch {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingSearch {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
+
+pub(crate) struct PendingSearchOpen {
+    cancellation: Cancellation,
+    handle: iced::task::Handle,
+}
+
+impl Drop for PendingSearchOpen {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.handle.abort();
+    }
+}
 
 pub(crate) fn boot(launch: &Launch, directory: DirectoryBackend) -> (Desktop, Task<Message>) {
     let (mut application, effects) =
@@ -195,6 +232,8 @@ impl Desktop {
             ),
             Effect::OpenExternal(request) => self.external_task(request),
             Effect::OpenLauncher(request) => self.open_launcher_task(request),
+            Effect::SearchSystem(request) => self.search_system_task(request),
+            Effect::OpenSearchResult(request) => self.open_search_result_task(request),
             Effect::ReadMetadata(request) => self.read_metadata(request),
             Effect::ListTree(request) => self.configuration_read(request, false),
             Effect::ResolveScope(request) => self.configuration_read(request, true),
@@ -214,6 +253,13 @@ impl Desktop {
                 },
             ),
             Effect::ObserveDirectories(observations) => self.observe_directories(observations),
+            Effect::RefreshLocations {
+                generation,
+                home,
+                pinned,
+                safety,
+            } => self.refresh_locations_task(generation, home, pinned, safety),
+            Effect::EjectVolume { box_id, path } => self.eject_volume_task(box_id, path),
             Effect::List(request) => {
                 let presentation = self.views.entry(request.view).or_default();
                 presentation.submitted_revision =
@@ -237,5 +283,120 @@ impl Desktop {
             }
         }));
         Task::batch([file_focus, reveal, effects])
+    }
+
+    fn refresh_locations_task(
+        &mut self,
+        generation: u64,
+        home: std::path::PathBuf,
+        pinned: Vec<std::path::PathBuf>,
+        safety: crate::domain::SafetyPreferences,
+    ) -> Task<Message> {
+        self.pending_locations = None;
+        let Some(workers) = &self.location_workers else {
+            return Task::done(Message::Action(Action::LocationsLoaded {
+                generation,
+                locations: Vec::new(),
+                ungranted_pins: std::collections::BTreeSet::new(),
+            }));
+        };
+        let (cancellation, future) = workers.detect(home, pinned, safety);
+        let (task, handle) = Task::perform(future, move |result| {
+            let (target_generation, locations, ungranted_pins) = match result {
+                Some((locations, ungranted_pins)) => (generation, locations, ungranted_pins),
+                None => (0, Vec::new(), std::collections::BTreeSet::new()),
+            };
+            Message::Action(Action::LocationsLoaded {
+                generation: target_generation,
+                locations,
+                ungranted_pins,
+            })
+        })
+        .abortable();
+        self.pending_locations = Some(PendingLocations {
+            cancellation,
+            handle,
+        });
+        task
+    }
+
+    fn search_system_task(
+        &mut self,
+        request: crate::application::files::search::SearchRequest,
+    ) -> Task<Message> {
+        self.pending_search = None;
+        let generation = request.generation;
+        let Some(workers) = &self.search_workers else {
+            return Task::done(Message::SearchCompleted(
+                crate::application::files::search::SearchCompletion {
+                    generation,
+                    result: Err("Spotlight search is unavailable right now.".into()),
+                },
+            ));
+        };
+        let (cancellation, future) = workers.search(request);
+        let (task, handle) = Task::perform(future, move |completion| {
+            Message::SearchCompleted(completion.unwrap_or(
+                crate::application::files::search::SearchCompletion {
+                    generation: 0,
+                    result: Err(String::new()),
+                },
+            ))
+        })
+        .abortable();
+        self.pending_search = Some(PendingSearch {
+            cancellation,
+            handle,
+        });
+        task
+    }
+
+    fn open_search_result_task(
+        &mut self,
+        request: crate::application::files::search::SearchOpenRequest,
+    ) -> Task<Message> {
+        self.pending_search_open = None;
+        let Some(workers) = &self.open_workers else {
+            return Task::done(Message::SearchResultOpened(
+                crate::application::files::search::SearchOpenCompletion {
+                    request,
+                    result: Err(
+                        "Cannot open this item: the opening service is unavailable. Relaunch and retry."
+                            .into(),
+                    ),
+                },
+            ));
+        };
+        let future = workers.open_search_result(request);
+        let cancellation = future.cancellation();
+        let (task, handle) = Task::perform(future, Message::SearchResultOpened).abortable();
+        self.pending_search_open = Some(PendingSearchOpen {
+            cancellation,
+            handle,
+        });
+        task
+    }
+
+    fn eject_volume_task(
+        &self,
+        box_id: crate::domain::BoxId,
+        path: std::path::PathBuf,
+    ) -> Task<Message> {
+        let Some(workers) = &self.location_workers else {
+            return Task::done(Message::Action(Action::VolumeEjected {
+                box_id,
+                path,
+                result: Err(
+                    "Volume ejection service is unavailable. Try again from Finder.".into(),
+                ),
+            }));
+        };
+        Task::perform(workers.eject(path.clone()), move |result| {
+            Message::Action(Action::VolumeEjected {
+                box_id,
+                path,
+                result,
+            })
+        })
     }
 }

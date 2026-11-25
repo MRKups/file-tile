@@ -18,9 +18,20 @@
         },
         "window": { "oneOf": [{ "$ref": "#/$defs/window" }, { "type": "null" }] },
         "new_box_folder": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] },
+        "pinned_folders": {
+          "oneOf": [
+            {
+              "type": "array",
+              "maxItems": 128,
+              "items": { "$ref": "#/$defs/path" }
+            },
+            { "type": "null" }
+          ]
+        },
         "appearance": { "$ref": "#/$defs/appearance" },
         "typography": { "$ref": "#/$defs/typography" },
-        "safety": { "$ref": "#/$defs/safety" }
+        "safety": { "$ref": "#/$defs/safety" },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
       },
       "required": ["last_workspace_id", "window", "new_box_folder", "appearance", "typography", "safety"]
     },
@@ -98,6 +109,13 @@
         "documents_access": { "type": "boolean" },
         "downloads_access": { "type": "boolean" },
         "full_disk_access": { "type": "boolean" },
+        "external_drives_access": { "type": "boolean" },
+        "network_shares_access": { "type": "boolean" },
+        "disabled_locations": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/path" }
+        },
         "system_folders": { "type": "boolean" },
         "applications": { "type": "boolean" },
         "credentials": { "type": "boolean" }
@@ -110,6 +128,20 @@
         "system_folders",
         "applications",
         "credentials"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "git": { "type": "boolean" },
+        "languages": { "type": "boolean" },
+        "env_files": { "type": "boolean" }
+      },
+      "required": [
+        "git",
+        "languages",
+        "env_files"
       ],
       "additionalProperties": false
     },
@@ -314,7 +346,8 @@
         "starting_folder": { "$ref": "#/$defs/path" },
         "current_folder": { "$ref": "#/$defs/path" },
         "scope": { "$ref": "#/$defs/scope" },
-        "history": { "$ref": "#/$defs/history" }
+        "history": { "$ref": "#/$defs/history" },
+        "top_item": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
       },
       "required": ["id", "starting_folder", "current_folder", "scope", "history"],
       "additionalProperties": false
@@ -361,7 +394,8 @@
         "show_sizes": { "type": "boolean" },
         "show_dates": { "type": "boolean" },
         "prohibit_delete": { "type": "boolean" },
-        "file_view": { "enum": ["list", "grid", "columns"] }
+        "file_view": { "enum": ["list", "grid", "columns"] },
+        "sidebar": { "type": "boolean" }
       },
       "required": ["show_forward", "show_up", "show_start", "show_hidden", "show_sizes", "show_dates", "prohibit_delete", "file_view", "sort"],
       "additionalProperties": false

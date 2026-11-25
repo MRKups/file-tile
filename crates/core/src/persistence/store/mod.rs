@@ -33,7 +33,7 @@ pub(super) struct Store {
     baselines: Vec<(ConfigKey, Vec<u8>)>,
     user_themes: Arc<[UserTheme]>,
     user_themes_baseline: Option<Vec<u8>>,
-    user_themes_notice: Option<String>,
+    pub(super) user_themes_notice: Option<String>,
     recovery: Option<RecoveryPlan>,
     management: Option<management::Pending>,
     #[cfg(test)]
@@ -124,27 +124,65 @@ impl Store {
         })?;
         if fresh {
             self.initialize()?;
+        } else {
+            let _ = super::healing::orphaned_temps::sweep_if_initialized(&self.config);
         }
         let preferences = self.read(ConfigKey::Preferences)?;
         let index = self.read(ConfigKey::WorkspaceIndex)?;
         let mut recovery_issues = notices(preferences.issues, ConfigKey::Preferences);
         recovery_issues.extend(notices(index.issues, ConfigKey::WorkspaceIndex));
-        let ConfigurationDocument::Preferences(preferences) = preferences.document else {
+        let ConfigurationDocument::Preferences(mut preferences) = preferences.document else {
             return Err(invalid("Expected preferences."));
         };
         let ConfigurationDocument::WorkspaceIndex(index) = index.document else {
             return Err(invalid("Expected a workspace index."));
         };
-        let id = preferences
+        let mut id = preferences
             .last_workspace_id
             .ok_or_else(|| invalid("The last-active workspace reference is missing."))?;
         if !index.workspaces.iter().any(|item| item.id == id) {
             return Err(invalid("The last-active workspace is not in the index."));
         }
-        let active = self.read(ConfigKey::Workspace(id))?;
-        recovery_issues.extend(notices(active.issues, ConfigKey::Workspace(id)));
-        let ConfigurationDocument::Workspace(active) = active.document else {
-            return Err(invalid("Expected a workspace."));
+        let mut healed_notice = None;
+        let active = match self.read(ConfigKey::Workspace(id)) {
+            Ok(decoded) => {
+                recovery_issues.extend(notices(decoded.issues, ConfigKey::Workspace(id)));
+                let ConfigurationDocument::Workspace(active) = decoded.document else {
+                    return Err(invalid("Expected a workspace."));
+                };
+                active
+            }
+            Err(StorageFailure::Io(std::io::ErrorKind::NotFound)) if recovery_issues.is_empty() => {
+                let Some(healed) =
+                    super::healing::workspace_fallback::heal_missing_active_workspace(
+                        &self.config,
+                        id,
+                        &index,
+                    )?
+                else {
+                    return Err(StorageFailure::Io(std::io::ErrorKind::NotFound));
+                };
+                match healed.scenario {
+                    super::healing::ConfigHealingScenario::MissingActiveWorkspaceFallback => {
+                        id = healed.id;
+                        preferences.last_workspace_id = Some(id);
+                        let pref_bytes =
+                            encode(&ConfigurationDocument::Preferences(preferences.clone()))
+                                .map_err(|error| invalid(error.reason()))?;
+                        self.publish_loaded(ConfigKey::Preferences, pref_bytes)?;
+                        self.baselines
+                            .push((ConfigKey::Workspace(id), healed.bytes));
+                    }
+                    _ => {
+                        self.publish(ConfigKey::Workspace(id), &healed.bytes, None)?;
+                        self.baselines
+                            .push((ConfigKey::Workspace(id), healed.bytes));
+                    }
+                }
+                healed_notice = Some(healed.notice);
+                healed.document
+            }
+            Err(error) => return Err(error),
         };
         self.active = Some((session, id));
         self.writable = recovery_issues.is_empty();
@@ -161,7 +199,7 @@ impl Store {
             user_themes_notice,
             recovery_issues,
             backup: None,
-            notice: None,
+            notice: healed_notice,
         })
     }
 
@@ -207,9 +245,11 @@ impl Store {
                 last_workspace_id: Some(id),
                 window: None,
                 new_box_folder: None,
+                pinned_folders: None,
                 appearance: Default::default(),
                 typography: Default::default(),
                 safety: Default::default(),
+                capabilities: Default::default(),
             }),
         ] {
             let key = match &document {
@@ -303,12 +343,29 @@ impl Store {
         if let Some(bytes) = index_bytes {
             self.publish_loaded(ConfigKey::WorkspaceIndex, bytes)?;
         }
+        self.publish_loaded(ConfigKey::Preferences, preferences_bytes)?;
         if let Some(themes) = &request.user_themes {
-            self.user_themes =
-                super::user_themes::publish(&self.config, themes, &mut self.user_themes_baseline)?;
-            self.user_themes_notice = None;
+            match super::user_themes::publish(&self.config, themes, &mut self.user_themes_baseline)
+            {
+                Ok(saved) => {
+                    self.user_themes = saved;
+                    self.user_themes_notice = None;
+                }
+                Err(failure) => {
+                    crate::diagnostics::session().record(
+                        crate::diagnostics::Subsystem::Storage,
+                        crate::diagnostics::Activity::Save,
+                        failure.diagnostic_outcome(),
+                        request.tag.attempt,
+                        request.tag.revision,
+                        None,
+                    );
+                    self.user_themes_notice =
+                        Some(format!("Cannot save user-themes.json: {failure}"));
+                }
+            }
         }
-        self.publish_loaded(ConfigKey::Preferences, preferences_bytes)
+        Ok(())
     }
 
     fn publish_loaded(&mut self, key: ConfigKey, bytes: Vec<u8>) -> Result<(), StorageFailure> {

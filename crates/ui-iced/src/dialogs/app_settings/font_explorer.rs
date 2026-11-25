@@ -31,7 +31,10 @@ const SAMPLE_ROWS: [(&str, &str); 5] = [
     ("Cargo.toml", "2.4 KB"),
     ("main.rs", "4.1 KB"),
     ("README.md", "3.8 KB"),
-    ("file-tile_0.1.0_aarch64.dmg", "14.2 MB"),
+    (
+        concat!("file-tile_", env!("CARGO_PKG_VERSION"), "_aarch64.dmg"),
+        "14.2 MB",
+    ),
 ];
 
 pub(crate) struct ExplorerDraft {

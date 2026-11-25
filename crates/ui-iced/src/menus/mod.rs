@@ -5,5 +5,6 @@ pub(crate) mod file_drag;
 pub(crate) mod file_prompt;
 pub(crate) mod file_transfers;
 pub(crate) mod folder_menu;
+pub(crate) mod sidebar_menu;
 pub(crate) mod sort_menu;
 pub(crate) mod tab_menu;

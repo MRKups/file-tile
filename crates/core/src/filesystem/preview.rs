@@ -81,6 +81,14 @@ pub(super) fn read(path: &Path, cancellation: &Cancellation) -> Result<PreviewDa
     if !info.is_file() {
         return Err("Cannot thumbnail this entry type. Only regular files are supported.".into());
     }
+    if super::is_dataless(&info) {
+        return Err("Online-only cloud file. Open the file to download it.".into());
+    }
+    if !crate::platform::volumes::is_local_measurable_mount(path) {
+        return Err(
+            "Automatic thumbnails are disabled on network and virtual drives. Use Open.".into(),
+        );
+    }
     if info.len() > IMAGE_LIMIT {
         return Err("Cannot load thumbnail: image exceeds 20 MiB. Use Open.".into());
     }

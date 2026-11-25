@@ -9,5 +9,6 @@ pub(crate) mod opening;
 pub(crate) mod sorting;
 pub(crate) mod startup;
 pub(crate) mod thumbnails;
+pub(crate) mod type_jump;
 pub(crate) mod watching;
 pub(crate) mod workspace_epoch;

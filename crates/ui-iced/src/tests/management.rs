@@ -55,6 +55,7 @@ fn created_result(
         })),
         source_saved: true,
         source_error: None,
+        user_themes_notice: None,
         cancelled: false,
     })
 }
@@ -135,6 +136,7 @@ fn management_widget_removal_requires_confirmation_and_targets_only_inactive_ide
             selected: None,
             source_saved: true,
             source_error: None,
+            user_themes_notice: None,
             cancelled: false,
         }),
     }));

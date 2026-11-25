@@ -41,6 +41,7 @@ impl crate::Desktop {
         {
             return iced::Task::none();
         }
+        self.cancel_pending_scroll_restore(view);
         let range = if self.modifiers.shift() {
             let anchor = self
                 .views
@@ -50,7 +51,11 @@ impl crate::Desktop {
                 .load(view)
                 .and_then(crate::application::LoadState::listing)
                 .and_then(|_| {
-                    let entries: Vec<_> = self.application.ordered_entries(view).collect();
+                    let entries: Vec<_> = self
+                        .application
+                        .ordered_entries(view)
+                        .filter(|entry| self.visible_entry(view, &entry.path).is_some())
+                        .collect();
                     let first = entries
                         .iter()
                         .position(|entry| Some(&entry.path) == anchor)?;
@@ -65,10 +70,15 @@ impl crate::Desktop {
         } else {
             None
         };
-        let had_preview_selection = self.column_previews.selected_entry(view).is_some();
+        let was_active = self.active_view == Some(view);
+        let had_preview_focus = self.column_previews.selected_entry(view).is_some()
+            || self.column_previews.is_focused(view);
+        self.type_jump.dismiss_session();
         let presentation = self.views.entry(view).or_default();
         presentation.pending_selection.clear();
         presentation.reveal_selected = false;
+        presentation.reveal_after_motion = false;
+        presentation.earlier_ancestors = false;
         let mut release = crate::menus::file_drag::ClickRelease::Keep;
         if let Some(range) = range {
             if !self.modifiers.command() {
@@ -89,7 +99,8 @@ impl crate::Desktop {
         } else if presentation.selection.contains(&path) && presentation.selection.len() > 1 {
             release = crate::menus::file_drag::ClickRelease::NarrowMultiSelection;
             presentation.selected = Some(path.clone());
-        } else if !had_preview_selection
+        } else if was_active
+            && !had_preview_focus
             && presentation.selected.as_ref() == Some(&path)
             && (presentation.selection.is_empty()
                 || (presentation.selection.len() == 1 && presentation.selection.contains(&path)))
@@ -104,10 +115,10 @@ impl crate::Desktop {
         }
         presentation.hint = None;
         self.column_previews.clear_selection(view);
-        self.active_view = Some(view);
+        self.activate_view(view);
         self.focused_path = None;
         self.focus_version = self.focus_version.saturating_add(1);
-        self.demand_thumbnails(view, std::slice::from_ref(&path));
+        self.demand_single_thumbnail(view, &path);
         self.begin_file_drag(view, path, release);
         iced::Task::batch([
             self.fill_thumbnails(),
@@ -227,6 +238,14 @@ fn row_content<'a>(
     ]
     .spacing(10)
     .align_y(iced::Center);
+    if entry.dataless {
+        row = row.push(icons::view(
+            Icon::Cloud,
+            ty.icon(13.0),
+            Some(muted),
+            label_alpha,
+        ));
+    }
     if entry.symlink {
         row = row.push(ty.caption("link").color(muted));
     }

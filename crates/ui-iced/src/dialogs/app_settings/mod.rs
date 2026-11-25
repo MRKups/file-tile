@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod access_safety;
 mod appearance;
+mod capabilities;
 mod controls;
 mod custom_themes;
 mod focus;
@@ -46,6 +47,7 @@ pub(crate) struct Draft {
     font_explorer: Option<font_explorer::ExplorerDraft>,
     safety: crate::domain::SafetyPreferences,
     access_safety: access_safety::AccessSafetyDraft,
+    capabilities: crate::domain::CapabilityPreferences,
     return_focus: Option<ViewId>,
 }
 
@@ -70,6 +72,7 @@ impl Draft {
                 .matches(application.appearance(), application.user_themes())
             || self.typography != application.typography()
             || self.safety != application.safety()
+            || self.capabilities != application.capabilities()
     }
 
     pub(crate) fn observe_system_appearance(
@@ -87,6 +90,21 @@ impl Draft {
 
     pub(crate) fn clear_picker(&mut self) {
         self.picker = None;
+    }
+
+    pub(crate) fn close_transient_menus(&mut self) {
+        self.font_picker_open = false;
+        self.font_picker_cursor = None;
+    }
+
+    pub(crate) fn restore_focus_after_overlay(&self) -> Task<Message> {
+        if self.appearance.custom_themes_open() {
+            operation::focus(custom_themes::CANCEL_ID)
+        } else if self.font_explorer.is_some() {
+            operation::focus(font_explorer::SEARCH_ID)
+        } else {
+            operation::focus("app-settings-cancel")
+        }
     }
 }
 
@@ -112,6 +130,7 @@ impl Desktop {
         self.native_menu.error().is_some()
             || self.about.is_some()
             || self.app_settings.is_some()
+            || self.search.is_some()
             || self.workspace_management.is_some()
             || self.storage_details && self.application.storage_detail().is_some()
     }
@@ -123,6 +142,24 @@ impl Desktop {
     }
 
     pub(crate) fn permits_ui_action(&self, action: &Action) -> bool {
+        let search_on_top = self.search.is_some()
+            && !(self.storage_details && self.application.storage_detail().is_some())
+            && self.native_menu.error().is_none()
+            && self.about.is_none()
+            && self.app_settings.is_none()
+            && self.workspace_management.is_none();
+        if search_on_top
+            && matches!(
+                action,
+                Action::SearchSystem { .. }
+                    | Action::SearchSystemCompleted(_)
+                    | Action::CancelSearch
+                    | Action::OpenSearchResult { .. }
+                    | Action::SearchResultOpened(_)
+            )
+        {
+            return true;
+        }
         // Widget messages arrive before the event subscription's modal guard.
         !(self.modal_open() || self.context_menu_open())
             || !matches!(
@@ -153,6 +190,10 @@ impl Desktop {
                     | Action::Escape
                     | Action::Navigate(..)
                     | Action::ReloadAll
+                    | Action::PinFolder { .. }
+                    | Action::UnpinFolder(_)
+                    | Action::ReorderPinnedFolder { .. }
+                    | Action::EjectVolume { .. }
                     | Action::ConfigureBox(_)
                     | Action::SetBoxSetting(..)
                     | Action::SetSort(..)
@@ -163,6 +204,9 @@ impl Desktop {
     }
 
     pub(crate) fn app_settings_message(&mut self, message: Message) -> Task<Message> {
+        if self.about.is_some() && !matches!(message, Message::AppFolderChosen(..)) {
+            return Task::none();
+        }
         match message {
             Message::OpenAppSettings => self.open_app_settings(),
             Message::AppSettingsChanged(folder) => {
@@ -202,10 +246,20 @@ impl Desktop {
             Message::AppAccessSafetyEdited(edit) => {
                 let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
                 let home = self.application.home().to_path_buf();
+                let mut refresh = false;
                 if let Some(draft) = &mut self.app_settings {
-                    draft
+                    refresh = draft
                         .access_safety
                         .apply(edit, &mut draft.safety, &home, probe_os);
+                }
+                if refresh {
+                    return self.dispatch(Action::RefreshLocations);
+                }
+                Task::none()
+            }
+            Message::AppCapabilitiesChanged(capabilities) => {
+                if let Some(draft) = &mut self.app_settings {
+                    draft.capabilities = capabilities;
                 }
                 Task::none()
             }
@@ -248,6 +302,7 @@ impl Desktop {
             font_explorer: None,
             safety: self.application.safety(),
             access_safety: access_safety::AccessSafetyDraft::new(&self.application, probe_os),
+            capabilities: self.application.capabilities(),
             return_focus: self.focused_path.take(),
         };
         self.focus_version = self.focus_version.saturating_add(1);
@@ -295,18 +350,38 @@ impl Desktop {
         };
         let focus = draft.return_focus;
         let typography = draft.typography;
-        let safety = draft.safety;
+        let safety = draft.safety.clone();
+        let capabilities = draft.capabilities;
         let task = self.dispatch(Action::ApplyAppSettings {
             new_box_folder: folder,
             appearance,
             user_themes,
             typography,
             safety,
+            capabilities,
         });
         if !self.application.app_settings_open() {
             return Task::batch([task, self.restore_workspace_focus(focus)]);
         }
         Task::batch([task, iced::advanced::widget::operate(focus::reveal())])
+    }
+
+    pub(crate) fn sync_app_settings_locations(&mut self) {
+        let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
+        if let Some(draft) = &mut self.app_settings {
+            draft
+                .access_safety
+                .sync_locations(&self.application, &draft.safety, probe_os);
+        }
+    }
+
+    pub(crate) fn reprobe_app_settings_on_focus(&mut self) {
+        let probe_os = matches!(self.directory, crate::DirectoryBackend::Native(_));
+        if let Some(draft) = &mut self.app_settings {
+            draft
+                .access_safety
+                .reprobe_on_focus(&self.application, &draft.safety, probe_os);
+        }
     }
 
     fn take_settings_focus(&mut self) -> Option<ViewId> {
@@ -614,9 +689,11 @@ pub(crate) mod tests {
                         last_workspace_id: Some(id),
                         window: None,
                         new_box_folder: folder,
+                        pinned_folders: None,
                         appearance: Default::default(),
                         typography: Default::default(),
                         safety: Default::default(),
+                        capabilities: Default::default(),
                     },
                     index: WorkspaceIndex {
                         workspaces: vec![WorkspaceSummary {

@@ -5,6 +5,7 @@ pub(crate) mod diagnostics;
 pub(crate) mod folder_picker;
 pub(crate) mod folder_tree;
 pub(crate) mod range_editor;
+pub(crate) mod search;
 pub(crate) mod storage_dialog;
 pub(crate) mod updates;
 pub(crate) mod workspace_management;

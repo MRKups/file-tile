@@ -191,20 +191,10 @@ pub fn start_outbound_drag(paths: &[PathBuf], allow_move: bool) -> Result<u64, S
 }
 
 fn validated_file_url(path: &Path) -> Result<Retained<NSURL>, String> {
-    let bytes = path.as_os_str().as_encoded_bytes();
-    if !path.is_absolute() || bytes.is_empty() || bytes.len() > 4096 || bytes.contains(&0) {
-        return Err("Cannot drag an invalid or non-absolute file path.".into());
-    }
-    let text = path
-        .to_str()
-        .ok_or_else(|| "Cannot drag a non-UTF-8 file path.".to_string())?;
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| "Cannot drag a file that is no longer available.".to_string())?;
-    let ns_path = NSString::from_str(text);
-    Ok(NSURL::fileURLWithPath_isDirectory(
-        &ns_path,
-        metadata.is_dir(),
-    ))
+    crate::file_url::encode_nsurl(path).map_err(|error| match error {
+        crate::file_url::FileUrlError::NonUtf8 => "Cannot drag a non-UTF-8 file path.".into(),
+        _ => "Cannot drag an invalid or non-absolute file path.".into(),
+    })
 }
 
 fn drag_preview_image(multiple: bool) -> Retained<NSImage> {

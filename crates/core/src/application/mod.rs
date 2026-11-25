@@ -2,6 +2,7 @@
 
 pub mod contracts;
 pub mod files;
+pub mod healing;
 pub mod preferences;
 #[cfg(test)]
 mod tests;
@@ -19,12 +20,12 @@ use contracts::{
     configuration::{self, AppPreferences, WorkspaceIndex},
     directory::{self, DirectoryListing, ListingCompletion, ListingRequest},
     storage::{
-        self, PersistenceState, SaveRequest, SaveTag, SessionId, StartupOperation,
+        self, CloseStage, PersistenceState, SaveRequest, SaveTag, SessionId, StartupOperation,
         StorageCompletion,
     },
     watching,
 };
-use files::{file_operations, folder_tree, folder_usage, metadata, opening, sorting};
+use files::{file_operations, folder_tree, folder_usage, metadata, opening, search, sorting};
 use preferences::{appearance, settings, typography};
 use workspace::{box_configuration, launchers, management, scopes, tabs};
 
@@ -33,6 +34,7 @@ pub enum Action {
     FolderUsageCompleted(folder_usage::UsageCompletion),
     SetSort(ViewId, crate::domain::sorting::SortSettings),
     SortCompleted(sorting::SortCompletion),
+    SyncViewScroll(ViewId, u32),
     StartFileOperation {
         view: ViewId,
         directory: PathBuf,
@@ -57,6 +59,16 @@ pub enum Action {
     RetryWorkspaceManagement,
     OpenFile(ViewId, PathBuf),
     ExternalOpened(opening::OpenCompletion),
+    SearchSystem {
+        query: String,
+    },
+    SearchSystemCompleted(search::SearchCompletion),
+    CancelSearch,
+    OpenSearchResult {
+        path: PathBuf,
+        kind: directory::EntryKind,
+    },
+    SearchResultOpened(search::SearchOpenCompletion),
     MetadataNeeded(ViewId, Vec<PathBuf>),
     MetadataCompleted(metadata::MetadataCompletion),
     EditScope(ViewId, scopes::ScopeEdit),
@@ -93,6 +105,30 @@ pub enum Action {
     Escape,
     Navigate(ViewId, Navigate),
     ReloadAll,
+    RefreshLocations,
+    LocationsLoaded {
+        generation: u64,
+        locations: Vec<crate::platform::volumes::DetectedLocation>,
+        ungranted_pins: std::collections::BTreeSet<PathBuf>,
+    },
+    EjectVolume {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+    },
+    VolumeEjected {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+        result: Result<(), String>,
+    },
+    PinFolder {
+        path: PathBuf,
+        index: Option<usize>,
+    },
+    UnpinFolder(PathBuf),
+    ReorderPinnedFolder {
+        from: usize,
+        to: usize,
+    },
     WatchCompleted(watching::WatchBatch),
     ListingCompleted(ListingCompletion),
     StorageCompleted(StorageCompletion),
@@ -119,6 +155,7 @@ pub enum Action {
         user_themes: Vec<appearance::UserTheme>,
         typography: typography::TypographyPreferences,
         safety: crate::domain::SafetyPreferences,
+        capabilities: crate::domain::CapabilityPreferences,
     },
 }
 
@@ -141,12 +178,24 @@ pub enum Effect {
     ManageWorkspace(storage::ManagementRequest),
     OpenExternal(opening::OpenRequest),
     OpenLauncher(launchers::Request),
+    SearchSystem(search::SearchRequest),
+    OpenSearchResult(search::SearchOpenRequest),
     ReadMetadata(metadata::MetadataRequest),
     ResolveScope(ListingRequest),
     ListTree(ListingRequest),
     CheckWorkspaceBudget(storage::BudgetRequest),
     List(ListingRequest),
     ObserveDirectories(Vec<watching::DirectoryObservation>),
+    RefreshLocations {
+        generation: u64,
+        home: PathBuf,
+        pinned: Vec<PathBuf>,
+        safety: crate::domain::SafetyPreferences,
+    },
+    EjectVolume {
+        box_id: crate::domain::BoxId,
+        path: PathBuf,
+    },
     LoadConfiguration(SessionId),
     RestoreBackup {
         session: SessionId,
@@ -166,6 +215,7 @@ pub enum LoadState {
     },
     Ready(Arc<DirectoryListing>),
     Failed {
+        kind: directory::DirectoryErrorKind,
         message: String,
         previous: Option<Arc<DirectoryListing>>,
     },
@@ -198,6 +248,12 @@ pub struct Application {
     status: Option<String>,
     persistence: PersistenceState,
     configuration: Option<(AppPreferences, WorkspaceIndex)>,
+    default_pinned_folders: Vec<PathBuf>,
+    pinned_folders: Option<Vec<PathBuf>>,
+    locations: Vec<crate::platform::volumes::DetectedLocation>,
+    ungranted_pins: std::collections::BTreeSet<PathBuf>,
+    location_generation: u64,
+    ejecting_volumes: std::collections::BTreeSet<PathBuf>,
     user_themes: std::sync::Arc<[appearance::UserTheme]>,
     user_themes_edited: bool,
     user_themes_notice: Option<String>,
@@ -219,6 +275,7 @@ pub struct Application {
     sorting: sorting::SortBook,
     opening: opening::OpeningBook,
     launcher_opening: launchers::OpeningBook,
+    search: search::SearchBook,
     file_operations: file_operations::Operations,
     column_previews: HashMap<ViewId, Arc<DirectoryListing>>,
     management: Option<management::PendingManagement>,
@@ -227,6 +284,7 @@ pub struct Application {
 impl Application {
     pub fn new(start: PathBuf, home: PathBuf) -> Self {
         let state_dir = crate::platform::state_directory(&home);
+        let default_pinned_folders = configuration::default_pinned_folders(&home);
         Self {
             workspace: Workspace::default(),
             loads: HashMap::new(),
@@ -237,6 +295,12 @@ impl Application {
             status: None,
             persistence: PersistenceState::Off,
             configuration: None,
+            default_pinned_folders,
+            pinned_folders: None,
+            locations: Vec::new(),
+            ungranted_pins: std::collections::BTreeSet::new(),
+            location_generation: 0,
+            ejecting_volumes: std::collections::BTreeSet::new(),
             user_themes: std::sync::Arc::from([]),
             user_themes_edited: false,
             user_themes_notice: None,
@@ -258,6 +322,7 @@ impl Application {
             sorting: sorting::SortBook::default(),
             opening: opening::OpeningBook::default(),
             launcher_opening: launchers::OpeningBook::default(),
+            search: search::SearchBook::default(),
             file_operations: file_operations::Operations::default(),
             column_previews: HashMap::new(),
             management: None,
@@ -272,9 +337,6 @@ impl Application {
     }
     pub fn home(&self) -> &std::path::Path {
         &self.home
-    }
-    pub fn state_directory(&self) -> &std::path::Path {
-        &self.state_dir
     }
     pub fn set_state_directory(&mut self, state_dir: PathBuf) {
         self.state_dir = state_dir;
@@ -306,8 +368,14 @@ impl Application {
         if item.settings.file_view != crate::domain::FileView::Columns {
             return None;
         }
-        let LoadState::Ready(parent) = self.loads.get(&view)? else {
-            return None;
+        let parent = match self.loads.get(&view)? {
+            LoadState::Ready(parent) => parent,
+            LoadState::Loading {
+                intent: NavigationIntent::Reload | NavigationIntent::Activate,
+                previous: Some(parent),
+                ..
+            } => parent,
+            _ => return None,
         };
         if parent.directory != item.navigation.current() {
             return None;
@@ -320,10 +388,17 @@ impl Application {
             return None;
         }
         let scope = item.navigation.scope();
-        let allowed = scope.kind() == crate::domain::ScopeKind::Free
-            || parent
+        let policy = self.safety_policy(Some(view));
+        let safety_ok = policy.check_read_directory(&preview.directory).is_ok()
+            && self.check_listing_mount_access(preview).is_ok()
+            && parent
                 .entry_target(entry)
-                .is_some_and(|resolved| scope.allows(resolved));
+                .is_none_or(|resolved| policy.check_read_directory(resolved).is_ok());
+        let allowed = safety_ok
+            && (scope.kind() == crate::domain::ScopeKind::Free
+                || parent
+                    .entry_target(entry)
+                    .is_some_and(|resolved| scope.allows(resolved)));
         allowed.then_some(preview)
     }
 
@@ -353,6 +428,20 @@ impl Application {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        if let Action::SyncViewScroll(view, top_item) = action {
+            if self.accepts_edits()
+                && matches!(
+                    self.persistence,
+                    PersistenceState::Ready {
+                        closing: CloseStage::Open,
+                        ..
+                    } | PersistenceState::Off
+                )
+            {
+                self.workspace.set_view_top_item(view, top_item);
+            }
+            return Vec::new();
+        }
         let sync = matches!(
             action,
             Action::FinishDraw
@@ -369,6 +458,7 @@ impl Application {
                 | Action::CancelClose
                 | Action::FileOperationCompleted(_)
                 | Action::ChangeTabs(..)
+                | Action::VolumeEjected { .. }
         );
         let force = matches!(action, Action::ReloadAll) && self.accepts_workspace_input();
         let mut effects = self.apply(action);
@@ -384,6 +474,7 @@ impl Application {
         self.sync_column_previews_validity();
         self.sync_opening();
         self.sync_launcher_opening();
+        self.sync_search();
         effects.extend(self.fill_metadata());
         effects
     }
@@ -396,6 +487,26 @@ impl Application {
             }
             Action::SortCompleted(completion) => {
                 self.complete_sort(completion);
+                return vec![];
+            }
+            Action::RefreshLocations => return self.refresh_locations(),
+            Action::LocationsLoaded {
+                generation,
+                locations,
+                ungranted_pins,
+            } => return self.locations_loaded(generation, locations, ungranted_pins),
+            Action::EjectVolume { box_id, path } => return self.eject_volume(box_id, path),
+            Action::VolumeEjected {
+                box_id,
+                path,
+                result,
+            } => return self.volume_ejected(box_id, path, result),
+            Action::SearchSystemCompleted(completion) => {
+                self.search_system_completed(completion);
+                return vec![];
+            }
+            Action::SearchResultOpened(completion) => {
+                self.search_result_opened(completion);
                 return vec![];
             }
             Action::FileOperationCompleted(receipt) => return self.files_completed(receipt),
@@ -472,21 +583,46 @@ impl Application {
                     return self.save_effect(true);
                 }
             }
-            Action::SortCompleted(_) | Action::FolderUsageCompleted(_) => {}
+            Action::PinFolder { path, index } => return self.pin_folder(path, index),
+            Action::UnpinFolder(path) => return self.unpin_folder(&path),
+            Action::ReorderPinnedFolder { from, to } => {
+                return self.reorder_pinned_folder(from, to);
+            }
             Action::ChangeTabs(id, command) => return self.change_tabs(id, command),
-            Action::StartFileOperation { .. }
-            | Action::FileOperationCompleted(_)
-            | Action::ResolveFileConflict(..)
-            | Action::StopFileOperation(_)
-            | Action::DismissFileOperation(_) => {}
             Action::OpenFile(view, path) => return self.open_file(view, path),
             Action::ExternalOpened(completion) => self.external_opened(completion),
+            Action::SearchSystem { query } => return self.search_system(query),
+            Action::CancelSearch => self.cancel_search(),
+            Action::OpenSearchResult { path, kind } => {
+                return self.open_search_result(path, kind);
+            }
             Action::MetadataNeeded(view, paths) => return self.request_metadata(view, paths),
             Action::MetadataCompleted(completion) => return self.complete_metadata(completion),
             Action::EditScope(view, edit) => return self.edit_scope(view, edit),
             Action::ScopeResolved(completion) => return self.scope_resolved(completion),
             Action::ToggleTree(view, path) => return self.toggle_tree(view, path),
             Action::TreeCompleted(completion) => return self.tree_completed(completion),
+            Action::Navigate(view, command) => effects.extend(self.navigate(view, command)),
+            Action::ReloadAll => {
+                self.reload_all();
+                effects.extend(self.refresh_locations());
+            }
+            Action::WatchCompleted(batch) => {
+                if self.watch_completed(batch) {
+                    effects.extend(self.refresh_locations());
+                }
+            }
+            Action::ListingCompleted(completion) => {
+                effects.extend(self.complete(completion));
+                effects.extend(self.fill_restore_reads());
+            }
+            other => return self.apply_canvas_action(other),
+        }
+        effects
+    }
+
+    fn apply_canvas_action(&mut self, action: Action) -> Vec<Effect> {
+        match action {
             Action::SelectMode(_) | Action::Escape => return self.workspace_mode_action(action),
             Action::BeginItemDraw(cell, extent) => {
                 self.workspace.begin_item_draw(cell, extent);
@@ -521,14 +657,19 @@ impl Application {
             | Action::RemoveSelected
             | Action::Undo => return self.editing_action(action),
             Action::CancelPointer => self.workspace.cancel_pointer(),
-            Action::Navigate(view, command) => effects.extend(self.navigate(view, command)),
-            Action::ReloadAll => self.reload_all(),
-            Action::WatchCompleted(batch) => self.watch_completed(batch),
-            Action::ListingCompleted(completion) => {
-                effects.extend(self.complete(completion));
-                effects.extend(self.fill_restore_reads());
-            }
-            Action::StorageCompleted(_)
+            Action::SortCompleted(_)
+            | Action::FolderUsageCompleted(_)
+            | Action::SyncViewScroll(..)
+            | Action::RefreshLocations
+            | Action::LocationsLoaded { .. }
+            | Action::EjectVolume { .. }
+            | Action::VolumeEjected { .. }
+            | Action::StartFileOperation { .. }
+            | Action::FileOperationCompleted(_)
+            | Action::ResolveFileConflict(..)
+            | Action::StopFileOperation(_)
+            | Action::DismissFileOperation(_)
+            | Action::StorageCompleted(_)
             | Action::RetrySave
             | Action::WindowPlacementObserved(_)
             | Action::WindowPlacementAdjusted(_)
@@ -537,19 +678,41 @@ impl Application {
             | Action::RestartStartup { .. }
             | Action::RequestClose
             | Action::CancelClose
-            | Action::CloseWithoutSaving => {}
-            Action::OpenAppSettings
+            | Action::CloseWithoutSaving
+            | Action::OpenAppSettings
             | Action::CancelAppSettings
-            | Action::ApplyAppSettings { .. } => {}
-            Action::OpenWorkspaceManagement
+            | Action::ApplyAppSettings { .. }
+            | Action::OpenWorkspaceManagement
             | Action::CancelWorkspaceManagement
             | Action::SelectWorkspace(_)
             | Action::CreateWorkspace(_)
             | Action::RenameWorkspace { .. }
             | Action::RemoveWorkspace { .. }
-            | Action::RetryWorkspaceManagement => {}
+            | Action::RetryWorkspaceManagement
+            | Action::SetSort(..)
+            | Action::PinFolder { .. }
+            | Action::UnpinFolder(_)
+            | Action::ReorderPinnedFolder { .. }
+            | Action::ChangeTabs(..)
+            | Action::OpenFile(..)
+            | Action::ExternalOpened(_)
+            | Action::SearchSystem { .. }
+            | Action::SearchSystemCompleted(_)
+            | Action::CancelSearch
+            | Action::OpenSearchResult { .. }
+            | Action::SearchResultOpened(_)
+            | Action::MetadataNeeded(..)
+            | Action::MetadataCompleted(_)
+            | Action::EditScope(..)
+            | Action::ScopeResolved(_)
+            | Action::ToggleTree(..)
+            | Action::TreeCompleted(_)
+            | Action::Navigate(..)
+            | Action::ReloadAll
+            | Action::WatchCompleted(_)
+            | Action::ListingCompleted(_) => {}
         }
-        effects
+        Vec::new()
     }
 
     fn finish_draw(&mut self) -> Vec<Effect> {
@@ -609,7 +772,11 @@ impl Application {
                 Ok(path) => (path, NavigationIntent::Open),
                 Err(error) => {
                     self.pending_configuration = None;
-                    self.fail(view, error.to_string());
+                    self.fail(
+                        view,
+                        directory::DirectoryErrorKind::Other,
+                        error.to_string(),
+                    );
                     return None;
                 }
             },
@@ -638,14 +805,17 @@ impl Application {
             && let Some(listing) = self.loads.get(&view).and_then(LoadState::retained_listing)
         {
             // Unchanged navigation supersedes an earlier pending target without adding history.
+            let measurable = listing.is_measurable();
             self.loads.insert(view, LoadState::Ready(listing));
-            let path = self
-                .workspace
-                .view(view)?
-                .navigation
-                .current()
-                .to_path_buf();
-            self.demand_folder_usage(path, std::time::Instant::now());
+            if measurable {
+                let path = self
+                    .workspace
+                    .view(view)?
+                    .navigation
+                    .current()
+                    .to_path_buf();
+                self.demand_folder_usage(path, std::time::Instant::now());
+            }
             return None;
         }
         let effect = self.request(view, target, intent);
@@ -664,6 +834,7 @@ impl Application {
         let Some(generation) = self.next_generation.checked_add(1) else {
             self.fail(
                 view,
+                directory::DirectoryErrorKind::Unavailable,
                 "Cannot load folder: request identity space exhausted. Wait for workspace saving, then relaunch."
                     .into(),
             );
@@ -702,15 +873,31 @@ impl Application {
         Some(Effect::List(request))
     }
 
-    fn fail(&mut self, view: ViewId, message: String) {
+    fn fail(&mut self, view: ViewId, kind: directory::DirectoryErrorKind, message: String) {
         let policy = self.safety_policy(Some(view));
         let previous = self
             .loads
             .get(&view)
             .and_then(LoadState::retained_listing)
-            .filter(|listing| policy.check_read_directory(&listing.directory).is_ok());
-        self.loads
-            .insert(view, LoadState::Failed { message, previous });
+            .filter(|listing| {
+                policy.check_read_directory(&listing.directory).is_ok()
+                    && self.check_listing_mount_access(listing).is_ok()
+            });
+        self.loads.insert(
+            view,
+            LoadState::Failed {
+                kind,
+                message,
+                previous,
+            },
+        );
+    }
+
+    pub fn check_listing_mount_access(
+        &self,
+        listing: &DirectoryListing,
+    ) -> Result<(), &'static str> {
+        directory::check_mount_origin_access(&self.safety(), listing.mount())
     }
 
     pub(in crate::application) fn reconcile_safety_views(
@@ -720,23 +907,76 @@ impl Application {
         if previous_safety == self.safety() {
             return Vec::new();
         }
-        let home = self.home.clone();
-        let next_safety = self.safety();
-        let views: Vec<(ViewId, PathBuf)> = self
+        let mut previous_policy = self.safety_policy(None);
+        previous_policy.preferences = previous_safety;
+        self.reconcile_safety_views_from_policy(&previous_policy)
+    }
+
+    pub(in crate::application) fn reconcile_safety_views_from_policy(
+        &mut self,
+        previous_policy: &crate::domain::SafetyPolicy,
+    ) -> Vec<Effect> {
+        let next_policy = self.safety_policy(None);
+        if *previous_policy == next_policy {
+            return Vec::new();
+        }
+        let broadened = policy_read_broadened(previous_policy, &next_policy);
+        let active_views: Vec<(ViewId, PathBuf)> = self
             .workspace
             .active_views()
             .map(|item| (item.view, item.navigation.current().to_path_buf()))
             .collect();
+        let active_ids: HashSet<ViewId> = active_views.iter().map(|(view, _)| *view).collect();
+        let inactive_views: Vec<(ViewId, PathBuf)> = self
+            .workspace
+            .boxes()
+            .iter()
+            .flat_map(|item| item.views())
+            .filter(|view| !active_ids.contains(&view.view))
+            .map(|view| (view.view, view.navigation.current().to_path_buf()))
+            .collect();
+        for (view, current) in inactive_views {
+            let allowed = self
+                .loads
+                .get(&view)
+                .and_then(LoadState::listing)
+                .is_none_or(|listing| {
+                    next_policy.check_read_directory(&current).is_ok()
+                        && next_policy.check_read_directory(&listing.directory).is_ok()
+                        && directory::check_mount_origin_access(
+                            &next_policy.preferences,
+                            listing.mount(),
+                        )
+                        .is_ok()
+                });
+            if !allowed {
+                self.loads.remove(&view);
+            }
+        }
+        self.sync_metadata();
         let mut effects = Vec::new();
-        for (view, current) in views {
-            let was_allowed =
-                crate::domain::safety::check_read_directory(&current, &home, previous_safety)
-                    .is_ok();
-            let now_allowed =
-                crate::domain::safety::check_read_directory(&current, &home, next_safety).is_ok();
-            if was_allowed != now_allowed
-                && let Some(effect) = self.navigate(view, Navigate::Refresh)
+        for (view, current) in active_views {
+            let load = self.loads.get(&view);
+            let retained_mount = load
+                .and_then(LoadState::listing)
+                .map(|listing| listing.mount().clone());
+            let was_allowed = previous_policy.check_read_directory(&current).is_ok()
+                && retained_mount.as_ref().is_none_or(|mount| {
+                    directory::check_mount_origin_access(&previous_policy.preferences, mount)
+                        .is_ok()
+                });
+            let now_allowed = next_policy.check_read_directory(&current).is_ok()
+                && retained_mount.as_ref().is_none_or(|mount| {
+                    directory::check_mount_origin_access(&next_policy.preferences, mount).is_ok()
+                });
+            let retry_failed =
+                broadened && matches!(load, Some(LoadState::Failed { .. })) && now_allowed;
+            if (was_allowed != now_allowed || retry_failed)
+                && let Some(effect) = self.request(view, current, NavigationIntent::Reload)
             {
+                if let Effect::List(request) = &effect {
+                    self.demand_usage_read(request.generation);
+                }
                 effects.push(effect);
             }
         }
@@ -769,7 +1009,7 @@ impl Application {
                 None,
             );
             return Vec::new();
-        }
+        };
         let intent = *intent;
         let usage_demand = self.finish_usage_read(completion.request.generation)
             || intent != NavigationIntent::Reload;
@@ -778,62 +1018,166 @@ impl Application {
             return Vec::new();
         }
         match completion.result {
-            Ok(listing) => {
-                if let Err(reason) = self
-                    .safety_policy(Some(view))
-                    .check_read_directory(&listing.directory)
-                {
-                    if intent == NavigationIntent::Configure {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, reason.to_owned()));
-                        return effects;
-                    }
-                    self.fail(view, reason.to_owned());
-                    return Vec::new();
-                }
-                if !self.read_scope(view).allows(&listing.directory) {
-                    if intent == NavigationIntent::Configure {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, "Cannot configure folder outside this Range. Edit its boundaries first.".into()));
-                        return effects;
-                    }
-                    self.fail(view, "Cannot enter folder outside this navigation scope. Choose an allowed folder or edit the scope.".into());
-                    return Vec::new();
-                }
-                if intent == NavigationIntent::Configure {
-                    if configuration::validate_saved_path(&listing.directory).is_err() {
-                        let effects = self.cancel_folder_configuration();
-                        self.box_configuration_error = Some((view, "Cannot configure folder: resolved path exceeds the saved-path limit. Choose a shorter folder path.".into()));
-                        return effects;
-                    }
-                    self.pending_configuration = None;
-                    self.box_configuration_error = None;
-                }
-                let changed =
-                    self.commit_listed_navigation(view, listing.directory.clone(), intent);
-                let usage_path = (usage_demand
-                    && listing.origin == directory::ListingOrigin::Local)
-                    .then(|| listing.directory.clone());
-                self.loads.insert(view, LoadState::Ready(Arc::new(listing)));
-                if let Some(path) = usage_path {
-                    self.demand_folder_usage(path, std::time::Instant::now());
-                }
-                if changed {
-                    self.save_effect(true)
-                } else {
-                    Vec::new()
-                }
-            }
+            Ok(listing) => self.complete_listing_success(view, intent, usage_demand, listing),
             Err(error) => {
+                if error.kind == directory::DirectoryErrorKind::PermissionDenied {
+                    self.note_path_access_denied(&error.path);
+                }
                 if intent == NavigationIntent::Configure {
                     let effects = self.cancel_folder_configuration();
                     self.box_configuration_error = Some((view, error.describe("configure folder")));
                     effects
+                } else if let Some(effect) = self.try_heal_directory_error(view, intent, &error) {
+                    vec![effect]
                 } else {
-                    self.fail(view, error.to_string());
+                    self.fail(view, error.kind, error.to_string());
                     Vec::new()
                 }
             }
         }
     }
+
+    fn note_path_access_denied(&mut self, denied: &std::path::Path) {
+        let matching_pins: Vec<PathBuf> = self
+            .pinned_folders()
+            .iter()
+            .filter(|pin| pin.starts_with(denied))
+            .cloned()
+            .collect();
+        self.ungranted_pins.extend(matching_pins);
+        for loc in &mut self.locations {
+            if loc.path.starts_with(denied) {
+                loc.accessible = false;
+            }
+        }
+    }
+
+    pub(in crate::application) fn note_path_access_granted(&mut self, granted: &std::path::Path) {
+        let home_roots = [
+            self.home.join("Desktop"),
+            self.home.join("Documents"),
+            self.home.join("Downloads"),
+        ];
+        let granted_tcc_root = home_roots
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(self.locations.iter().map(|loc| loc.path.as_path()))
+            .find(|root| granted.starts_with(root))
+            .map(std::path::Path::to_path_buf);
+        self.ungranted_pins.retain(|pin| {
+            !granted.starts_with(pin)
+                && granted_tcc_root
+                    .as_ref()
+                    .is_none_or(|root| !pin.starts_with(root))
+        });
+        for loc in &mut self.locations {
+            if granted.starts_with(&loc.path) {
+                loc.accessible = true;
+            }
+        }
+    }
+
+    fn complete_listing_success(
+        &mut self,
+        view: ViewId,
+        intent: NavigationIntent,
+        usage_demand: bool,
+        listing: DirectoryListing,
+    ) -> Vec<Effect> {
+        let safety_err = self
+            .safety_policy(Some(view))
+            .check_read_directory(&listing.directory)
+            .err()
+            .or_else(|| self.check_listing_mount_access(&listing).err());
+        if let Some(reason) = safety_err {
+            if intent == NavigationIntent::Configure {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((view, reason.to_owned()));
+                return effects;
+            }
+            self.fail(
+                view,
+                directory::DirectoryErrorKind::AccessDisabled,
+                reason.to_owned(),
+            );
+            return Vec::new();
+        }
+        self.note_path_access_granted(&listing.directory);
+        if !self.read_scope(view).allows(&listing.directory) {
+            if intent == NavigationIntent::Configure {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((
+                    view,
+                    "Cannot configure folder outside this Range. Edit its boundaries first.".into(),
+                ));
+                return effects;
+            }
+            self.fail(
+                view,
+                directory::DirectoryErrorKind::OutsideScope,
+                "Cannot enter folder outside this navigation scope. Choose an allowed folder or edit the scope."
+                    .into(),
+            );
+            return Vec::new();
+        }
+        let mut restore_effects = Vec::new();
+        if intent == NavigationIntent::Configure {
+            if configuration::validate_saved_path(&listing.directory).is_err() {
+                let effects = self.cancel_folder_configuration();
+                self.box_configuration_error = Some((
+                    view,
+                    "Cannot configure folder: resolved path exceeds the saved-path limit. Choose a shorter folder path."
+                        .into(),
+                ));
+                return effects;
+            }
+            self.box_configuration_error = None;
+        }
+        let changed = self.commit_listed_navigation(view, listing.directory.clone(), intent);
+        let active_view_matches = self
+            .workspace
+            .view(view)
+            .is_some_and(|item| item.navigation.current() == listing.directory);
+        if intent == NavigationIntent::Configure && !active_view_matches {
+            restore_effects = self.cancel_folder_configuration();
+        } else {
+            if intent == NavigationIntent::Configure {
+                self.pending_configuration = None;
+            }
+            let usage_path =
+                (usage_demand && listing.is_measurable()).then(|| listing.directory.clone());
+            self.loads.insert(view, LoadState::Ready(Arc::new(listing)));
+            if let Some(path) = usage_path {
+                self.demand_folder_usage(path, std::time::Instant::now());
+            }
+        }
+        if changed {
+            restore_effects.extend(self.save_effect(true));
+        }
+        restore_effects
+    }
+}
+
+fn policy_read_broadened(
+    prev: &crate::domain::SafetyPolicy,
+    next: &crate::domain::SafetyPolicy,
+) -> bool {
+    let p = &prev.preferences;
+    let n = &next.preferences;
+    (!p.desktop_access && n.desktop_access)
+        || (!p.documents_access && n.documents_access)
+        || (!p.downloads_access && n.downloads_access)
+        || (!p.external_drives_access && n.external_drives_access)
+        || (!p.network_shares_access && n.network_shares_access)
+        || p.disabled_locations
+            .iter()
+            .any(|path| !n.disabled_locations.contains(path))
+        || prev
+            .external_drive_roots
+            .iter()
+            .any(|root| !next.external_drive_roots.contains(root))
+        || prev
+            .network_share_roots
+            .iter()
+            .any(|root| !next.network_share_roots.contains(root))
 }

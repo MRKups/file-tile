@@ -20,6 +20,9 @@ fn metadata(desktop: &mut Desktop) {
                     Ok(FileMetadata {
                         bytes: Some(1234),
                         modified: Ok(std::time::UNIX_EPOCH),
+                        created: Some(std::time::UNIX_EPOCH),
+                        item_count: None,
+                        dimensions: None,
                     }),
                 )
             })
@@ -57,6 +60,7 @@ fn files_fixture() -> Result<Desktop, Box<dyn std::error::Error>> {
                 kind: EntryKind::File,
                 hidden: false,
                 symlink: false,
+                dataless: false,
                 inode: None,
             }
         })

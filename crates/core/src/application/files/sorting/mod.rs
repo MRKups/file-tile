@@ -71,6 +71,24 @@ impl Application {
     pub fn sort_status(&self, view: ViewId) -> Option<&str> {
         self.sorting.views.get(&view)?.status.as_deref()
     }
+    pub fn is_sort_ready(&self, view: ViewId) -> bool {
+        if !self.workspace.is_active(view) {
+            return false;
+        }
+        let Some(item) = self.workspace.view(view) else {
+            return false;
+        };
+        let Some(listing) = self.loads.get(&view).and_then(LoadState::retained_listing) else {
+            return false;
+        };
+        listing.directory == item.navigation.current()
+            && self.sorting.views.get(&view).is_some_and(|state| {
+                state.phase == Phase::Finished
+                    && Arc::ptr_eq(&listing, &state.request.listing)
+                    && state.request.settings == item.settings.sort
+                    && state.request.show_hidden == item.settings.show_hidden
+            })
+    }
     pub fn ordered_entries(&self, view: ViewId) -> impl Iterator<Item = &DirectoryEntry> {
         let listing = self.load(view).and_then(LoadState::listing);
         let hidden = self

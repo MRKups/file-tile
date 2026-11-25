@@ -8,6 +8,7 @@ pub(super) fn operation(subsystem: Subsystem, activity: Activity) -> Option<&'st
         Activity::OpenFile => Some("open the file in its default application"),
         Activity::OpenLauncher => Some("open the shortcut target"),
         Activity::OpenLogs => Some("open the diagnostic logs folder"),
+        Activity::Search => Some("search this Mac with Spotlight"),
         Activity::CheckWorkspaceReference => Some("load the active workspace"),
         Activity::Load => Some("load saved configuration"),
         Activity::Restore => Some("restore the configuration backup"),
@@ -22,6 +23,7 @@ pub(super) fn operation(subsystem: Subsystem, activity: Activity) -> Option<&'st
             Subsystem::Size => Some("estimate folder size"),
             Subsystem::Files => Some("run the file operation"),
             Subsystem::Opening => Some("open the file in its default application"),
+            Subsystem::Search => Some("search this Mac with Spotlight"),
             _ => None,
         },
         Activity::Register => Some("watch folders for changes"),
@@ -66,7 +68,6 @@ pub(super) fn text(event: &Event) -> Option<String> {
         Outcome::Busy => "too many requests are pending".into(),
         Outcome::Unavailable => "the required background service is unavailable".into(),
         Outcome::TimedOut => "the operation exceeded its time limit".into(),
-        Outcome::InvalidOutput => "the system utility returned an unreadable result".into(),
         Outcome::UnsafePath => "a managed configuration path is a symbolic link or has the wrong file type".into(),
         // Constructed solely from ErrorKind, never from a raw OS error or path.
         Outcome::Io(kind) => match kind {
@@ -84,7 +85,6 @@ pub(super) fn text(event: &Event) -> Option<String> {
         Outcome::NotFound => "the folder no longer exists".into(),
         Outcome::NotDirectory => "the location is not a folder".into(),
         Outcome::PermissionDenied => "access was denied".into(),
-        Outcome::OutputLimit => "the system utility exceeded its output limit".into(),
         Outcome::Failed => "the operation failed; its cause was not recorded".into(),
         _ => return None,
     };
@@ -131,6 +131,12 @@ fn guidance(event: &Event) -> &'static str {
         Subsystem::Thumbnail => "The image preview is unavailable. The file was not changed.",
         Subsystem::Sorting => {
             "The requested ordering may not be available. Reload the folder to retry."
+        }
+        Subsystem::Search if event.outcome == Outcome::TimedOut => {
+            "Narrow the search query and retry."
+        }
+        Subsystem::Search => {
+            "Open tiles search remains available; check Spotlight indexing if This Mac search stays unavailable."
         }
         _ => "Collect application error output along with this log.",
     }

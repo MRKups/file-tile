@@ -19,6 +19,14 @@ impl CreateKind {
             Self::Json => "JSON",
         }
     }
+    pub const fn dot_extension(self) -> Option<&'static str> {
+        match self {
+            Self::Folder => None,
+            Self::Text => Some(".txt"),
+            Self::Markdown => Some(".md"),
+            Self::Json => Some(".json"),
+        }
+    }
     pub fn default_name(self) -> &'static str {
         match self {
             Self::Folder => "New folder",

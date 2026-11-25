@@ -279,10 +279,20 @@ fn confirmation_view(
                 .backup_offer()
                 .filter(|offer| offer.token == token)
             {
-                content = content.push(
-                    ty.text(format!("Restore these documents from validated backups?\n\n{}\n\nPrevious files will be preserved beside the configuration. Backups will not be changed. Unsaved viewing changes will be discarded.", offer.documents.join("\n")))
-                        .color(palette.text),
-                );
+                content = content
+                    .push(
+                        ty.text("Restore these documents from validated backups?")
+                            .color(palette.text),
+                    )
+                    .push(
+                        ty.text(offer.documents.join("\n"))
+                            .font(ty.heading_font())
+                            .color(palette.accent),
+                    )
+                    .push(
+                        ty.text("Previous files will be preserved beside the configuration. Backups will not be changed. Unsaved viewing changes will be discarded.")
+                            .color(palette.text),
+                    );
                 true
             } else {
                 content = content.push(

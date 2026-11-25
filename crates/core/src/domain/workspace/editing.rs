@@ -245,6 +245,14 @@ impl Workspace {
             .map(|index| (target[index] - start[index]).abs())
             .max()
             .unwrap_or(0);
+        let endpoint = GridRect {
+            origin: Cell::new(target[0] as u16, target[1] as u16),
+            width: (target[2] - target[0]) as u16,
+            height: (target[3] - target[1]) as u16,
+        };
+        let legacy_expanding = kind == shape::ItemKind::FolderBox
+            && !shape::is_folder_box_shape(original)
+            && shape::allows_resize(kind, original, endpoint);
         let mut result = original;
         // At most 200 steps. Walk each snapped boundary, not only the endpoint.
         for step in 1..=steps {
@@ -257,16 +265,20 @@ impl Workspace {
                 width: (bounds[2] - bounds[0]) as u16,
                 height: (bounds[3] - bounds[1]) as u16,
             };
-            if !shape::allows_resize(kind, result, next) {
-                break;
-            }
             if self
                 .placements()
                 .any(|item| item.id != id && item.rect.intersects(next))
             {
                 break;
             }
-            result = next;
+            if shape::allows_resize(kind, result, next) {
+                result = next;
+            } else if legacy_expanding && next.width >= result.width && next.height >= result.height
+            {
+                continue;
+            } else {
+                break;
+            }
         }
         result
     }

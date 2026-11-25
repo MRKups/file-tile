@@ -242,7 +242,11 @@ def source_violations(source: str) -> list[str]:
 
 def tracked_repository_files(root: Path) -> list[Path]:
     if (root / ".git").exists():
-        result = run_command(["git", "--no-optional-locks", "ls-files", "-z"], cwd=root, merge_stderr=False)
+        result = run_command(
+            ["git", "--no-optional-locks", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+            merge_stderr=False,
+        )
         if result.returncode == 0 and isinstance(result.stdout, str):
             return [
                 root / entry
@@ -281,6 +285,68 @@ def check_license_notices(root: Path) -> list[str]:
                     errors.append(
                         f"LICENSES/THIRD-PARTY-NOTICES.txt: missing direct dependency {dep_name} (run `task licenses`)"
                     )
+    return errors
+
+
+def sync_workspace_lockfile(lock_path: Path, member_names: set[str], ws_version: str) -> None:
+    text = lock_path.read_text(encoding="utf-8")
+    names_pattern = "|".join(re.escape(name) for name in sorted(member_names))
+    pattern = re.compile(
+        rf'(\[\[package\]\]\nname = "(?:{names_pattern})"\nversion = )"([^"]+)"(\n(?!source = ))'
+    )
+    updated = pattern.sub(rf'\g<1>"{ws_version}"\g<3>', text)
+    if updated != text:
+        lock_path.write_text(updated, encoding="utf-8")
+
+
+def check_workspace_versions(root: Path) -> list[str]:
+    manifest_path = root / "Cargo.toml"
+    lock_path = root / "Cargo.lock"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return ["Cargo.toml: unreadable or invalid TOML"]
+    workspace = manifest.get("workspace")
+    if not isinstance(workspace, dict):
+        return []
+    ws_package = workspace.get("package", {})
+    ws_version = ws_package.get("version") if isinstance(ws_package, dict) else None
+    if not isinstance(ws_version, str) or re.fullmatch(PACKAGE_VERSION, ws_version) is None:
+        return ["Cargo.toml: [workspace.package].version is missing or malformed"]
+    errors = []
+    members = workspace.get("members", [])
+    member_names: set[str] = set()
+    for member in members if isinstance(members, list) else []:
+        member_toml = (root / member / "Cargo.toml").resolve()
+        rel = member_toml.relative_to(root.resolve())
+        try:
+            data = tomllib.loads(member_toml.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            errors.append(f"{rel}: unreadable or invalid TOML")
+            continue
+        pkg = data.get("package", {})
+        if isinstance(pkg, dict):
+            name = pkg.get("name")
+            if isinstance(name, str):
+                member_names.add(name)
+            if pkg.get("version") != {"workspace": True}:
+                errors.append(
+                    f"{rel}: package.version must use `version.workspace = true` (single source of truth in root [workspace.package])"
+                )
+    if not errors and lock_path.is_file() and member_names:
+        try:
+            sync_workspace_lockfile(lock_path, member_names, ws_version)
+            lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+            for pkg in lock.get("package", []):
+                name = pkg.get("name")
+                if name in member_names and "source" not in pkg and pkg.get("version") != ws_version:
+                    errors.append(
+                        f"Cargo.lock: workspace package `{name}` has version {pkg.get('version')} != {ws_version}"
+                    )
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            errors.append("Cargo.lock: unreadable or invalid TOML")
     return errors
 
 
@@ -335,6 +401,7 @@ def check_repository_hygiene(root: Path) -> list[str]:
         for label, pattern in SECRET_PATTERNS:
             if pattern.search(text):
                 errors.append(f"{relative}: detected {label}")
+    errors.extend(check_workspace_versions(root))
     errors.extend(check_license_notices(root))
     errors.extend(check_workflows(root))
     return errors
@@ -566,7 +633,11 @@ def run_qualification(root: Path, target: str | None, binary: Path | None) -> in
     try:
         manifest = qualification_file(root, "Cargo.toml")
         lock = qualification_file(root, "Cargo.lock")
-        package = tomllib.loads(manifest.decode("utf-8"))["package"]
+        manifest_data = tomllib.loads(manifest.decode("utf-8"))
+        package = manifest_data["package"]
+        raw_version = package["version"]
+        if raw_version == {"workspace": True}:
+            raw_version = manifest_data["workspace"]["package"]["version"]
         schema = json.loads(qualification_file(root, "schemas/file-tile-config.schema.json"))
         version = schema["properties"]["schema_version"]["const"]
         if type(version) is not int or version < 1:
@@ -574,7 +645,7 @@ def run_qualification(root: Path, target: str | None, binary: Path | None) -> in
         report["identity"] = {
             "status": "available",
             "package": qualification_token(package["name"], PACKAGE_NAME),
-            "version": qualification_token(package["version"], PACKAGE_VERSION),
+            "version": qualification_token(raw_version, PACKAGE_VERSION),
             "schema_format": qualification_token(schema["properties"]["format"]["const"], r"[A-Za-z0-9_.-]+"),
             "schema_version": version,
             "manifest_sha256": hashlib.sha256(manifest).hexdigest(),

@@ -30,6 +30,7 @@ pub enum Subsystem {
     Storage,
     Files,
     Opening,
+    Search,
 }
 /// Categories only. Never carry configuration values or user-supplied labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,7 @@ pub enum Activity {
     OpenFile,
     OpenLauncher,
     OpenLogs,
+    Search,
     CheckWorkspaceReference,
     CacheMiss,
     CacheReuse,
@@ -135,7 +137,6 @@ pub enum Outcome {
     Busy,
     Unavailable,
     TimedOut,
-    InvalidOutput,
     Stale,
     RecoveryOnly,
     Superseded,
@@ -153,7 +154,6 @@ pub enum Outcome {
     WaitingFiles,
     WaitingTransition,
     WaitingSave,
-    OutputLimit,
     NativeFailure,
     NotFound,
     NotDirectory,

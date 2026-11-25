@@ -32,6 +32,7 @@ struct Job {
 
 enum ReadMode {
     List(crate::domain::Scope),
+    ListPermitted(crate::domain::Scope, Box<crate::domain::SafetyPolicy>),
     Resolve,
 }
 
@@ -97,6 +98,14 @@ impl DirectoryWorkers {
         scope: crate::domain::Scope,
     ) -> DirectoryFuture {
         self.submit_job(request, ReadMode::List(scope))
+    }
+    pub fn submit_permitted(
+        &self,
+        request: ListingRequest,
+        scope: crate::domain::Scope,
+        safety: crate::domain::SafetyPolicy,
+    ) -> DirectoryFuture {
+        self.submit_job(request, ReadMode::ListPermitted(scope, Box::new(safety)))
     }
     pub fn resolve(&self, request: ListingRequest) -> DirectoryFuture {
         self.submit_job(request, ReadMode::Resolve)
@@ -293,6 +302,12 @@ fn worker_loop(queue: Arc<Queue>, reader: Arc<dyn DirectoryReader + Send + Sync>
                 ReadMode::List(scope) => {
                     reader.list_scoped(&job.request.directory, &scope, &job.cancellation)
                 }
+                ReadMode::ListPermitted(scope, safety) => reader.list_permitted(
+                    &job.request.directory,
+                    &scope,
+                    &safety,
+                    &job.cancellation,
+                ),
                 ReadMode::Resolve => reader
                     .resolve_directory(&job.request.directory, &job.cancellation)
                     .map(|directory| {

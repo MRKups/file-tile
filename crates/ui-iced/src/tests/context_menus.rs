@@ -33,6 +33,7 @@ fn fixture(layout: FileView) -> Result<Desktop, Box<dyn std::error::Error>> {
         kind,
         hidden: false,
         symlink: false,
+        dataless: false,
         inode: None,
     })
     .collect();

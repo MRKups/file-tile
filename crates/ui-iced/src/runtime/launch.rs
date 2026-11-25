@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub struct Launch {
@@ -11,10 +11,14 @@ pub struct Launch {
 
 impl Launch {
     pub fn from_env() -> io::Result<Self> {
-        let home = std::env::var_os("HOME").map(PathBuf::from)
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
             .filter(|path| path.is_absolute())
+            .map(|path| canonicalize_best_effort(&path))
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Cannot start browsing: HOME is not an absolute folder path. Set HOME and relaunch."))?;
-        Self::parse(std::env::args_os().skip(1), home, std::env::current_dir()?)
+        let mut launch = Self::parse(std::env::args_os().skip(1), home, std::env::current_dir()?)?;
+        launch.state_dir = canonicalize_best_effort(&launch.state_dir);
+        Ok(launch)
     }
 
     pub(crate) fn parse(
@@ -55,6 +59,27 @@ impl Launch {
             home,
         })
     }
+}
+
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let mut current = path.to_path_buf();
+    let mut suffix = Vec::new();
+    while let Some(name) = current.file_name() {
+        suffix.push(name.to_os_string());
+        if !current.pop() {
+            break;
+        }
+        if let Ok(mut canonical) = std::fs::canonicalize(&current) {
+            for part in suffix.into_iter().rev() {
+                canonical.push(part);
+            }
+            return canonical;
+        }
+    }
+    path.to_path_buf()
 }
 
 fn argument_error() -> io::Error {

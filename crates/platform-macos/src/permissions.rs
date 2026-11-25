@@ -31,20 +31,45 @@ pub fn check_full_disk_access(home: &Path) -> PermissionStatus {
     PermissionStatus::Denied
 }
 
+pub fn check_path_access(path: &Path) -> PermissionStatus {
+    match fs::metadata(path) {
+        Ok(meta) if !meta.is_dir() => return PermissionStatus::Unavailable,
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            return PermissionStatus::Denied;
+        }
+        Err(_) => return PermissionStatus::Unavailable,
+    }
+    match access(path, Access::READ_OK) {
+        Ok(()) => PermissionStatus::Granted,
+        Err(Errno::ACCESS | Errno::PERM) => PermissionStatus::Denied,
+        Err(_) => PermissionStatus::Unavailable,
+    }
+}
+
 pub fn check_folder_access(folder_name: Option<&str>, home: &Path) -> PermissionStatus {
     match folder_name {
         None => check_full_disk_access(home),
-        Some(folder_name) => {
-            let path = home.join(folder_name);
-            if !path.exists() {
-                return PermissionStatus::Unavailable;
-            }
-            match access(&path, Access::READ_OK) {
-                Ok(()) => PermissionStatus::Granted,
-                Err(Errno::ACCESS | Errno::PERM) => PermissionStatus::Denied,
-                Err(_) => PermissionStatus::Unavailable,
-            }
+        Some(folder_name) => check_path_access(&home.join(folder_name)),
+    }
+}
+
+pub fn request_path_access(path: &Path) -> PermissionStatus {
+    match fs::metadata(path) {
+        Ok(meta) if !meta.is_dir() => return PermissionStatus::Unavailable,
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            return PermissionStatus::Denied;
         }
+        Err(_) => return PermissionStatus::Unavailable,
+    }
+    match fs::read_dir(path) {
+        Ok(mut entries) => {
+            let _ = entries.next();
+            PermissionStatus::Granted
+        }
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => PermissionStatus::Denied,
+        Err(_) => PermissionStatus::Unavailable,
     }
 }
 
@@ -57,23 +82,7 @@ pub fn request_folder_access(folder_name: Option<&str>, home: &Path) -> Permissi
             }
             status
         }
-        Some(folder_name) => {
-            let path = home.join(folder_name);
-            if !path.exists() {
-                return PermissionStatus::Unavailable;
-            }
-            match fs::read_dir(&path) {
-                Ok(mut entries) => {
-                    let _ = entries.next();
-                    PermissionStatus::Granted
-                }
-                Err(error) if error.kind() == ErrorKind::PermissionDenied => {
-                    let _ = open_privacy_settings(false);
-                    PermissionStatus::Denied
-                }
-                Err(_) => PermissionStatus::Unavailable,
-            }
-        }
+        Some(folder_name) => request_path_access(&home.join(folder_name)),
     }
 }
 

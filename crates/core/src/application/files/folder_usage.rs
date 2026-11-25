@@ -1,5 +1,5 @@
 //! Shared session estimates. Only explicit demand can refresh an expired value.
-use crate::application::{Application, Effect, contracts::directory::ListingOrigin};
+use crate::application::{Application, Effect};
 use crate::diagnostics::{Activity, Outcome, Subsystem, session};
 use crate::domain::ViewId;
 use std::{
@@ -176,20 +176,29 @@ impl Application {
                 _ => None,
             })
     }
+    fn is_detected_cloud_subtree(&self, path: &std::path::Path) -> bool {
+        self.locations.iter().any(|loc| {
+            matches!(loc.kind, crate::platform::volumes::LocationKind::Cloud(_))
+                && path.starts_with(&loc.path)
+        })
+    }
     fn usage_paths(&self) -> BTreeSet<PathBuf> {
         let policy = self.safety_policy(None);
         self.workspace
             .active_views()
             .filter_map(|view| {
                 let listing = self.load(view.view)?.listing()?;
-                (listing.origin == ListingOrigin::Local
-                    && policy.can_measure_directory(&listing.directory))
+                (listing.is_measurable()
+                    && policy.can_measure_directory(&listing.directory)
+                    && !self.is_detected_cloud_subtree(&listing.directory))
                 .then(|| listing.directory.clone())
             })
             .collect()
     }
     pub(in crate::application) fn demand_folder_usage(&mut self, path: PathBuf, now: Instant) {
-        if !self.safety_policy(None).can_measure_directory(&path) {
+        if !self.safety_policy(None).can_measure_directory(&path)
+            || self.is_detected_cloud_subtree(&path)
+        {
             return;
         }
         let protected = self.usage_paths();
@@ -228,6 +237,11 @@ impl Application {
             return vec![];
         }
         let paths = self.usage_paths();
+        for (dir, entry) in &mut self.usage.paths {
+            if matches!(entry.phase, Phase::Queued) && !paths.contains(dir) {
+                entry.phase = Phase::Idle;
+            }
+        }
         for path in &paths {
             if !self.usage.paths.contains_key(path) {
                 self.usage.demand(path.clone(), &paths, now);
