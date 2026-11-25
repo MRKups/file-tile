@@ -215,6 +215,7 @@ pub enum LoadState {
     },
     Ready(Arc<DirectoryListing>),
     Failed {
+        kind: directory::DirectoryErrorKind,
         message: String,
         previous: Option<Arc<DirectoryListing>>,
     },
@@ -774,7 +775,11 @@ impl Application {
                 Ok(path) => (path, NavigationIntent::Open),
                 Err(error) => {
                     self.pending_configuration = None;
-                    self.fail(view, error.to_string());
+                    self.fail(
+                        view,
+                        directory::DirectoryErrorKind::Other,
+                        error.to_string(),
+                    );
                     return None;
                 }
             },
@@ -832,6 +837,7 @@ impl Application {
         let Some(generation) = self.next_generation.checked_add(1) else {
             self.fail(
                 view,
+                directory::DirectoryErrorKind::Unavailable,
                 "Cannot load folder: request identity space exhausted. Wait for workspace saving, then relaunch."
                     .into(),
             );
@@ -870,7 +876,7 @@ impl Application {
         Some(Effect::List(request))
     }
 
-    fn fail(&mut self, view: ViewId, message: String) {
+    fn fail(&mut self, view: ViewId, kind: directory::DirectoryErrorKind, message: String) {
         let policy = self.safety_policy(Some(view));
         let previous = self
             .loads
@@ -880,8 +886,14 @@ impl Application {
                 policy.check_read_directory(&listing.directory).is_ok()
                     && self.check_listing_mount_access(listing).is_ok()
             });
-        self.loads
-            .insert(view, LoadState::Failed { message, previous });
+        self.loads.insert(
+            view,
+            LoadState::Failed {
+                kind,
+                message,
+                previous,
+            },
+        );
     }
 
     pub fn check_listing_mount_access(
@@ -1023,7 +1035,7 @@ impl Application {
                 {
                     vec![effect]
                 } else {
-                    self.fail(view, error.to_string());
+                    self.fail(view, error.kind, error.to_string());
                     Vec::new()
                 }
             }
@@ -1088,7 +1100,11 @@ impl Application {
                 self.box_configuration_error = Some((view, reason.to_owned()));
                 return effects;
             }
-            self.fail(view, reason.to_owned());
+            self.fail(
+                view,
+                directory::DirectoryErrorKind::AccessDisabled,
+                reason.to_owned(),
+            );
             return Vec::new();
         }
         self.note_path_access_granted(&listing.directory);
@@ -1103,6 +1119,7 @@ impl Application {
             }
             self.fail(
                 view,
+                directory::DirectoryErrorKind::OutsideScope,
                 "Cannot enter folder outside this navigation scope. Choose an allowed folder or edit the scope."
                     .into(),
             );

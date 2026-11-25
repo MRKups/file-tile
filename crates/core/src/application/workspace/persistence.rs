@@ -423,6 +423,7 @@ impl Application {
                 *load = match previous.take() {
                     Some(previous) => crate::application::LoadState::Ready(previous),
                     None => crate::application::LoadState::Failed {
+                        kind: crate::application::contracts::directory::DirectoryErrorKind::Cancelled,
                         message: "Folder loading was cancelled during close. Reload folder listings to retry."
                             .into(),
                         previous: None,

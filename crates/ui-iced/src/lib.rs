@@ -455,7 +455,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_desktop(launch: launch::Launch) -> Result<(), Box<dyn std::error::Error>> {
     let system_font = system_font::SystemFont::load();
-    let workers = Arc::new(DirectoryWorkers::new(Arc::new(NativeDirectory), 2, 8)
+    let workers = Arc::new(DirectoryWorkers::new(Arc::new(NativeDirectory), 2, 64)
         .map_err(|error| std::io::Error::other(format!("Cannot start directory workers: {error}. Relaunch and collect error output if it persists.")))?);
     let metadata_workers = Arc::new(crate::filesystem::MetadataWorkers::new(Arc::new(
         NativeDirectory,

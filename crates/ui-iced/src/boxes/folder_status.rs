@@ -3,7 +3,11 @@ use iced::widget::{Row, container, row, rule, text, tooltip};
 use iced::{Color, Element, Fill};
 
 use crate::application::files::folder_usage::{Estimate, UsageError};
-use crate::application::{LoadState, contracts::watching::WatchState, files::sorting::PREPARING};
+use crate::application::{
+    LoadState,
+    contracts::{directory::DirectoryErrorKind, watching::WatchState},
+    files::sorting::PREPARING,
+};
 use crate::domain::{CapabilityItem, CapabilityPreferences, NavigationIntent};
 
 use crate::{Message, runtime::metadata, window::appearance as a, window::typography};
@@ -42,8 +46,8 @@ fn statuses(
     sort_status: Option<&str>,
 ) -> Vec<Status> {
     let mut statuses = vec![];
-    if let Some(LoadState::Failed { message, .. }) = load {
-        statuses.push(failure("Folder read failed", message.clone(), palette));
+    if let Some(LoadState::Failed { kind, message, .. }) = load {
+        statuses.push(failure(failure_label(*kind), message.clone(), palette));
     } else if let Some(listing) = load.and_then(LoadState::listing)
         && let Some(issue) = listing.issues.first()
     {
@@ -216,6 +220,20 @@ fn capabilities_strip<'a>(
         .style(move |_| palette.tooltip())
         .into(),
     )
+}
+
+fn failure_label(kind: DirectoryErrorKind) -> &'static str {
+    match kind {
+        DirectoryErrorKind::NotFound => "Folder not found",
+        DirectoryErrorKind::NotDirectory => "Not a folder",
+        DirectoryErrorKind::PermissionDenied => "Access denied",
+        DirectoryErrorKind::AccessDisabled => "Access turned off",
+        DirectoryErrorKind::Unavailable => "Location unavailable",
+        DirectoryErrorKind::Busy => "Folder busy",
+        DirectoryErrorKind::OutsideScope => "Outside Range",
+        DirectoryErrorKind::Cancelled => "Folder read cancelled",
+        DirectoryErrorKind::Other => "Folder read failed",
+    }
 }
 
 fn failure(label: &str, detail: String, palette: a::Palette) -> Status {

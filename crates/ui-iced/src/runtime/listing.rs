@@ -395,6 +395,8 @@ impl Desktop {
                 )))
             }
             DirectoryBackend::Native(workers) => {
+                // Drop the prior pending read first so `submit_permitted` sweeps its cancelled slot.
+                self.pending_reads.remove(&request.view);
                 let future = workers.submit_permitted(request.clone(), scope, safety);
                 let cancellation = future.cancellation();
                 let (task, handle) = Task::perform(future, |completion| {
